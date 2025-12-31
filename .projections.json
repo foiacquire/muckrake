@@ -1,0 +1,25 @@
+{
+  "crates/*/src/*.rs": {
+    "type": "source",
+    "alternate": "crates/{}/tests/{}.rs"
+  },
+  "crates/*/tests/*.rs": {
+    "type": "test",
+    "alternate": "crates/{}/src/{}.rs"
+  },
+  "crates/muckrake-core/src/lib.rs": {
+    "type": "lib"
+  },
+  "crates/muckrake-core/src/entity.rs": {
+    "type": "entity"
+  },
+  "crates/muckrake-core/src/relationship.rs": {
+    "type": "relationship"
+  },
+  "crates/muckrake-core/src/storage.rs": {
+    "type": "storage"
+  },
+  "crates/muckrake-core/src/error.rs": {
+    "type": "error"
+  }
+}

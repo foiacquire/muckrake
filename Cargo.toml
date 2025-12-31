@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/muckrake-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["monokrome <monokrome@monokro.me>"]
+license = "MIT"
+repository = "https://github.com/monokrome/muckrake"
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# IDs
+uuid = { version = "1", features = ["v7", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Fuzzy matching
+strsim = "0.11"
+
+# Graph
+petgraph = "0.7"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
