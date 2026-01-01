@@ -4,7 +4,8 @@
     "error": {
       "loadFailed": "Failed to load: {{message}}"
     },
-    "untitledProject": "Untitled Project"
+    "unknownWorkspace": "Unknown Workspace",
+    "unknownProject": "Unknown Project"
   },
   "menu": {
     "file": {

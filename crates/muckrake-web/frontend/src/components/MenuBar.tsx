@@ -17,11 +17,11 @@ interface Menu {
 
 interface Props {
   menus: Menu[];
-  projectName?: string;
-  onProjectClick?: () => void;
+  workspaceName?: string;
+  onWorkspaceClick?: () => void;
 }
 
-export function MenuBar({ menus, projectName, onProjectClick }: Props) {
+export function MenuBar({ menus, workspaceName, onWorkspaceClick }: Props) {
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -83,9 +83,9 @@ export function MenuBar({ menus, projectName, onProjectClick }: Props) {
         ))}
       </div>
       <div className={styles.menuBarSpacer} />
-      {projectName && (
-        <button className={styles.projectSelector} onClick={onProjectClick}>
-          {projectName} <span className={styles.dropdownArrow}>▼</span>
+      {workspaceName && (
+        <button className={styles.workspaceSelector} onClick={onWorkspaceClick}>
+          {workspaceName} <span className={styles.dropdownArrow}>▼</span>
         </button>
       )}
     </div>

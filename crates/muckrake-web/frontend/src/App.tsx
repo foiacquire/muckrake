@@ -86,7 +86,7 @@ function App() {
   if (loading) {
     return (
       <div className={styles.app}>
-        <MenuBar menus={menus} projectName={t('app.loading')} />
+        <MenuBar menus={menus} workspaceName={t('app.loading')} />
         <div className={styles.appBody}>
           <div className={styles.loadingState}>{t('app.loading')}</div>
         </div>
@@ -98,7 +98,7 @@ function App() {
   if (error) {
     return (
       <div className={styles.app}>
-        <MenuBar menus={menus} projectName={t('menu.file.label')} />
+        <MenuBar menus={menus} workspaceName={t('app.unknownWorkspace')} />
         <div className={styles.appBody}>
           <div className={styles.errorState}>
             <p>{t('app.error.loadFailed', { message: error.message })}</p>
@@ -111,7 +111,7 @@ function App() {
 
   return (
     <div className={styles.app}>
-      <MenuBar menus={menus} projectName={t('app.untitledProject')} />
+      <MenuBar menus={menus} workspaceName={t('app.unknownWorkspace')} />
       <div className={styles.appBody}>
         <Sidebar
           entities={entities}

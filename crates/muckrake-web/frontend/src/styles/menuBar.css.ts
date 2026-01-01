@@ -95,7 +95,7 @@ export const menuBarSpacer = style({
   flex: 1,
 });
 
-export const projectSelector = style({
+export const workspaceSelector = style({
   background: 'none',
   border: 'none',
   color: vars.color.textPrimary,
