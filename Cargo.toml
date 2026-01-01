@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/muckrake-core",
+    "crates/muckrake-web",
 ]
 
 [workspace.package]
@@ -37,6 +38,15 @@ strsim = "0.11"
 
 # Graph
 petgraph = "0.7"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Web
+axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -1,0 +1,59 @@
+{
+  "app": {
+    "loading": "Loading...",
+    "error": {
+      "loadFailed": "Failed to load: {{message}}"
+    },
+    "untitledProject": "Untitled Project"
+  },
+  "menu": {
+    "file": {
+      "label": "File",
+      "newProject": "New Project",
+      "openProject": "Open Project",
+      "save": "Save",
+      "export": "Export...",
+      "exit": "Exit"
+    },
+    "edit": {
+      "label": "Edit",
+      "undo": "Undo",
+      "redo": "Redo",
+      "addEntity": "Add Entity",
+      "addRelationship": "Add Relationship",
+      "find": "Find"
+    },
+    "view": {
+      "label": "View",
+      "zoomIn": "Zoom In",
+      "zoomOut": "Zoom Out",
+      "fitToScreen": "Fit to Screen",
+      "showGrid": "Show Grid",
+      "showLabels": "Show Labels"
+    },
+    "help": {
+      "label": "Help",
+      "documentation": "Documentation",
+      "keyboardShortcuts": "Keyboard Shortcuts",
+      "about": "About muckrake"
+    }
+  },
+  "sidebar": {
+    "emptyState": {
+      "none": "None",
+      "noMatches": "No matches"
+    },
+    "filter": {
+      "placeholder": "Filter entities...",
+      "searchPlaceholder": "Search by name...",
+      "selected": "{{count}} selected"
+    }
+  },
+  "fuzzySelect": {
+    "noResults": "No results"
+  },
+  "statusBar": {
+    "entities": "{{count}} entities",
+    "relationships": "{{count}} relationships"
+  }
+}
