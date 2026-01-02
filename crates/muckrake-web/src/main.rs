@@ -1,5 +1,8 @@
 mod api;
+mod config;
+mod session;
 mod state;
+mod workspace;
 
 use std::net::SocketAddr;
 
@@ -26,8 +29,8 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let db_path = std::env::var("MUCKRAKE_DB").unwrap_or_else(|_| "muckrake.db".to_string());
-    let state = AppState::new(&db_path).await?;
+    // Multi-session support: each session gets its own project
+    let state = AppState::new();
 
     let static_dir = std::env::var("MUCKRAKE_STATIC")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/static").to_string());

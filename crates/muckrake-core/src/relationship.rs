@@ -172,6 +172,8 @@ pub struct Relationship {
     pub source_id: Uuid,
     pub target_id: Uuid,
     pub relation_type: RelationType,
+    pub valid_from: Option<DateTime<Utc>>,
+    pub valid_to: Option<DateTime<Utc>>,
     pub confidence: Option<f64>,
     pub data: RelationshipData,
     pub created_at: DateTime<Utc>,
@@ -192,6 +194,8 @@ impl Relationship {
             source_id,
             target_id,
             relation_type,
+            valid_from: None,
+            valid_to: None,
             confidence: None,
             data: RelationshipData::default(),
             created_at: Utc::now(),
@@ -209,43 +213,59 @@ impl Relationship {
         self.data = data;
         self
     }
+
+    #[must_use]
+    pub fn with_validity(mut self, from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> Self {
+        self.valid_from = from;
+        self.valid_to = to;
+        self
+    }
+
+    pub fn is_valid_at(&self, date: DateTime<Utc>) -> bool {
+        let after_start = self.valid_from.map_or(true, |from| date >= from);
+        let before_end = self.valid_to.map_or(true, |to| date < to);
+        after_start && before_end
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     pub id: Uuid,
+    pub source_id: Option<Uuid>,
     pub entity_id: Option<Uuid>,
     pub relationship_id: Option<Uuid>,
-    pub document_id: String,
+    pub excerpt: Option<String>,
     pub page_number: Option<u32>,
-    pub text_span: Option<String>,
-    pub context: Option<String>,
+    pub location: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
 }
 
 impl Evidence {
     #[must_use]
-    pub fn for_entity(entity_id: Uuid, document_id: String) -> Self {
+    pub fn for_entity(entity_id: Uuid, source_id: Uuid) -> Self {
         Self {
             id: Uuid::now_v7(),
+            source_id: Some(source_id),
             entity_id: Some(entity_id),
             relationship_id: None,
-            document_id,
+            excerpt: None,
             page_number: None,
-            text_span: None,
-            context: None,
+            location: None,
+            created_at: Utc::now(),
         }
     }
 
     #[must_use]
-    pub fn for_relationship(relationship_id: Uuid, document_id: String) -> Self {
+    pub fn for_relationship(relationship_id: Uuid, source_id: Uuid) -> Self {
         Self {
             id: Uuid::now_v7(),
+            source_id: Some(source_id),
             entity_id: None,
             relationship_id: Some(relationship_id),
-            document_id,
+            excerpt: None,
             page_number: None,
-            text_span: None,
-            context: None,
+            location: None,
+            created_at: Utc::now(),
         }
     }
 
@@ -256,14 +276,14 @@ impl Evidence {
     }
 
     #[must_use]
-    pub fn with_span(mut self, text_span: String) -> Self {
-        self.text_span = Some(text_span);
+    pub fn with_excerpt(mut self, excerpt: String) -> Self {
+        self.excerpt = Some(excerpt);
         self
     }
 
     #[must_use]
-    pub fn with_context(mut self, context: String) -> Self {
-        self.context = Some(context);
+    pub fn with_location(mut self, location: serde_json::Value) -> Self {
+        self.location = Some(location);
         self
     }
 }

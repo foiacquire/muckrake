@@ -10,10 +10,11 @@
   "menu": {
     "file": {
       "label": "File",
-      "newProject": "New Project",
       "openProject": "Open Project",
-      "save": "Save",
+      "openWorkspace": "Open Workspace",
+      "saveWorkspace": "Save Workspace",
       "export": "Export...",
+      "settings": "Settings",
       "exit": "Exit"
     },
     "edit": {
@@ -39,7 +40,86 @@
       "about": "About muckrake"
     }
   },
+  "settings": {
+    "title": "Settings",
+    "close": "Close",
+    "save": "Save",
+    "cancel": "Cancel",
+    "search": "Search settings...",
+    "clearSearch": "Clear search",
+    "noResults": "No settings match your search",
+    "tabs": {
+      "network": "Network",
+      "storage": "Storage",
+      "general": "General"
+    },
+    "network": {
+      "mode": {
+        "title": "Network Mode",
+        "description": "Control how muckrake connects to the internet. The default mode routes all traffic through Tor with Snowflake for maximum privacy and censorship resistance.",
+        "label": "Connection Mode",
+        "hint": "Snowflake uses WebRTC to bypass censorship. Recommended for most users.",
+        "options": {
+          "torSnowflake": "Tor + Snowflake (Recommended)",
+          "torObfs4": "Tor + obfs4",
+          "torDirect": "Tor Direct",
+          "directUnsafe": "Direct Connection (Unsafe)"
+        },
+        "unsafeWarning": "Warning: Direct connections expose your IP address and location. Only use this for local development or when you fully understand the risks."
+      },
+      "torProvider": {
+        "title": "Tor Connection",
+        "description": "Choose how muckrake connects to Tor. The system will try each option in order until one works.",
+        "label": "Preferred Provider",
+        "hint": "Most users should leave the defaults. Tor Browser Proxy is useful if you already have Tor Browser running.",
+        "options": {
+          "tor": "System Tor",
+          "arti": "Arti",
+          "torBrowser": "Tor Browser Proxy",
+          "existingProxy": "Custom Proxy"
+        }
+      },
+      "proxy": {
+        "title": "Proxy Settings",
+        "portLabel": "SOCKS Port",
+        "portHint": "Default: 9150 (Tor Browser), 9050 (System Tor)",
+        "allowOnion": "Allow .onion addresses"
+      },
+      "bypass": {
+        "title": "Bypass Domains",
+        "description": "Domains that should connect directly without going through Tor. Use sparingly - only for localhost or trusted internal services.",
+        "addLabel": "Add Domain",
+        "add": "Add",
+        "hint": "Subdomains are automatically included (e.g., 'example.com' includes 'api.example.com')",
+        "remove": "Remove {{domain}}"
+      }
+    },
+    "storage": {
+      "title": "Storage",
+      "description": "Configure database and file storage settings.",
+      "comingSoon": "Storage settings coming soon."
+    },
+    "general": {
+      "title": "General",
+      "description": "General application settings.",
+      "recentProjects": {
+        "title": "Recent Projects",
+        "label": "Remember recent projects",
+        "hint": "Disabled by default for your safety. Stores project names locally in your browser.",
+        "warning": {
+          "title": "Security Warning",
+          "message": "Enabling this feature will store the names of projects you open in your browser's local storage. This data could be discovered by anyone with access to your computer or browser. If you are working on sensitive investigations, we strongly recommend keeping this feature disabled.",
+          "confirm": "I understand the risks",
+          "cancel": "Keep disabled"
+        }
+      }
+    }
+  },
   "sidebar": {
+    "tabs": {
+      "entities": "Entities",
+      "projects": "Projects"
+    },
     "emptyState": {
       "none": "None",
       "noMatches": "No matches"
@@ -48,6 +128,10 @@
       "placeholder": "Filter entities...",
       "searchPlaceholder": "Search by name...",
       "selected": "{{count}} selected"
+    },
+    "projects": {
+      "noProjects": "No projects open",
+      "noFiles": "No files"
     }
   },
   "fuzzySelect": {
@@ -56,5 +140,37 @@
   "statusBar": {
     "entities": "{{count}} entities",
     "relationships": "{{count}} relationships"
+  },
+  "openProject": {
+    "title": "Open Project",
+    "description": "Open a folder as a project. If the folder doesn't contain a project database, one will be created.",
+    "directoryLabel": "Project Directory",
+    "hint": "The folder will contain your project's database and any associated files.",
+    "open": "Open"
+  },
+  "saveWorkspace": {
+    "title": "Save Workspace",
+    "description": "Download your workspace configuration. This file contains a list of your open projects and can be used to restore your session later.",
+    "nameLabel": "Workspace Name",
+    "willDownload": "Will download",
+    "download": "Download"
+  },
+  "openWorkspace": {
+    "title": "Open Workspace",
+    "description": "Select a workspace file (.mkspc) to open. This will open all projects listed in the workspace.",
+    "descriptionRemote": "Browse the server to find a workspace file (.mkspc) to open.",
+    "browse": "Choose file...",
+    "local": "Local",
+    "remote": "Remote",
+    "invalidFile": "Invalid workspace file",
+    "willOpen": "\"{{name}}\" contains {{count}} project(s)",
+    "open": "Open"
+  },
+  "fileBrowser": {
+    "loading": "Loading...",
+    "empty": "Empty folder",
+    "showHidden": "Show hidden",
+    "go": "Go",
+    "home": "Home"
   }
 }

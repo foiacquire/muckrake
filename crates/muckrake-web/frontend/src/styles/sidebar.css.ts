@@ -5,7 +5,41 @@ export const sidebar = style({
   width: '240px',
   minWidth: '200px',
   background: vars.color.bgSecondary,
-  borderInlineEnd: `1px solid ${vars.color.bgTertiary}`,
+  borderInlineStart: `1px solid ${vars.color.bgTertiary}`,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+});
+
+export const tabBar = style({
+  display: 'flex',
+  borderBottom: `1px solid ${vars.color.bgTertiary}`,
+  background: vars.color.bgPrimary,
+});
+
+export const tab = style({
+  flex: 1,
+  padding: `${vars.space.sm} ${vars.space.md}`,
+  background: 'none',
+  border: 'none',
+  borderBottom: '2px solid transparent',
+  color: vars.color.textSecondary,
+  fontSize: vars.font.sizeSm,
+  fontWeight: 500,
+  cursor: 'pointer',
+  transition: 'color 0.15s, border-color 0.15s',
+  ':hover': {
+    color: vars.color.textPrimary,
+  },
+});
+
+export const tabActive = style({
+  color: vars.color.accent,
+  borderBottomColor: vars.color.accent,
+});
+
+export const tabContent = style({
+  flex: 1,
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',

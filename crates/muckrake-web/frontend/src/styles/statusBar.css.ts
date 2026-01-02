@@ -6,7 +6,7 @@ export const statusBar = style({
   justifyContent: 'space-between',
   alignItems: 'center',
   height: '22px',
-  background: vars.color.accent,
+  background: vars.color.accentDark,
   padding: `0 ${vars.space.sm}`,
   fontSize: vars.font.sizeXs,
   color: 'white',

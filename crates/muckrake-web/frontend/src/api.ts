@@ -1,4 +1,4 @@
-import type { Entity, Relationship } from './types';
+import type { Entity, Relationship, Project, FileEntry, ServerConfig } from './types';
 
 const API_BASE = '/api';
 
@@ -63,5 +63,30 @@ export const api = {
 
     delete: (id: string) =>
       fetchJSON<void>(`${API_BASE}/relationships/${id}`, { method: 'DELETE' }),
+  },
+
+  session: {
+    listProjects: () =>
+      fetchJSON<{ projects: Project[] }>(`${API_BASE}/session/projects`),
+  },
+
+  files: {
+    list: (path: string) =>
+      fetchJSON<{ path: string; parent: string | null; entries: FileEntry[] }>(
+        `${API_BASE}/files/list?path=${encodeURIComponent(path)}`
+      ),
+
+    home: () =>
+      fetchJSON<{ path: string }>(`${API_BASE}/files/home`),
+  },
+
+  config: {
+    get: () =>
+      fetchJSON<ServerConfig>(`${API_BASE}/config`),
+  },
+
+  workspaces: {
+    dir: () =>
+      fetchJSON<{ path: string }>(`${API_BASE}/workspaces/dir`),
   },
 };

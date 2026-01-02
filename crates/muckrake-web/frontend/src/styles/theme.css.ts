@@ -15,22 +15,23 @@ export const vars = createGlobalTheme(':root', {
     // Accents
     accent: '#4da6ff',         // Brighter blue, better visibility
     accentHover: '#66b3ff',
+    accentDark: '#1a2a3d',     // Very dark steel blue for status bar
     error: '#ff6b6b',
     success: '#51cf66',
     warning: '#ffd43b',
   },
   font: {
     family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-    sizeXs: '11px',
-    sizeSm: '12px',
-    sizeMd: '13px',
+    sizeXs: '12px',    // was 11px, now ~12.65 rounded to 12
+    sizeSm: '14px',    // was 12px, now ~13.8 rounded to 14
+    sizeMd: '15px',    // was 13px, now ~14.95 rounded to 15
   },
   space: {
-    xs: '4px',
-    sm: '8px',
-    md: '12px',
-    lg: '16px',
-    xl: '24px',
+    xs: '3px',         // was 4px - more compact
+    sm: '6px',         // was 8px - more compact
+    md: '10px',        // was 12px - more compact
+    lg: '14px',        // was 16px - more compact
+    xl: '20px',        // was 24px - more compact
   },
   radius: {
     sm: '3px',

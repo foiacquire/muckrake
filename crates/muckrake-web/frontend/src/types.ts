@@ -48,4 +48,22 @@ export interface Relationship {
   created_at: string;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_hidden?: boolean;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  files: FileEntry[];
+}
+
+export interface ServerConfig {
+  allow_remote_workspaces: boolean;
+}
+
 // Colors are defined in styles/theme.css.ts (entityColors)

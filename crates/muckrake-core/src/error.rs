@@ -8,14 +8,23 @@ pub enum Error {
     #[error("Relationship not found: {0}")]
     RelationshipNotFound(uuid::Uuid),
 
+    #[error("Source not found: {0}")]
+    SourceNotFound(uuid::Uuid),
+
     #[error("Invalid entity type: {0}")]
     InvalidEntityType(String),
 
     #[error("Invalid relationship type: {0}")]
     InvalidRelationshipType(String),
 
+    #[error("Invalid source type: {0}")]
+    InvalidSourceType(String),
+
     #[error("Duplicate alias: {alias} already exists for entity {entity_id}")]
     DuplicateAlias { entity_id: uuid::Uuid, alias: String },
+
+    #[error("Duplicate source: content hash {hash} already exists")]
+    DuplicateSource { hash: String },
 
     #[error("Self-referential relationship not allowed")]
     SelfReference,
@@ -25,6 +34,9 @@ pub enum Error {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

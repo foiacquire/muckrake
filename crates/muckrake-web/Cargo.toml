@@ -18,8 +18,15 @@ anyhow.workspace = true
 
 # Web framework
 axum.workspace = true
+axum-extra.workspace = true
 tower.workspace = true
 tower-http.workspace = true
+
+# Time
+chrono.workspace = true
+
+# Directories
+dirs.workspace = true
 
 # Tracing
 tracing.workspace = true

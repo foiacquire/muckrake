@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
-import type { Entity, Relationship } from './types';
+import type { Entity, Relationship, Project } from './types';
 
 export function useEntities() {
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -62,4 +62,29 @@ export function useRelationships(entityIds: string[]) {
   }, [refresh]);
 
   return { relationships, loading, error, refresh };
+}
+
+export function useProjects() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.session.listProjects();
+      setProjects(data.projects);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error(String(e)));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { projects, loading, error, refresh };
 }

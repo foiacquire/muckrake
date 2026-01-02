@@ -4,6 +4,10 @@ import { MenuBar } from './components/MenuBar';
 import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { EntityGraph } from './components/Graph';
+import { SettingsModal } from './components/SettingsModal';
+import { OpenProjectModal } from './components/OpenProjectModal';
+import { OpenWorkspaceModal } from './components/OpenWorkspaceModal';
+import { SaveWorkspaceModal } from './components/SaveWorkspaceModal';
 import { useEntities, useRelationships } from './hooks';
 import * as styles from './styles/app.css';
 
@@ -11,53 +15,61 @@ function App() {
   const { t } = useTranslation();
   const { entities, loading, error } = useEntities();
   const [selectedId, setSelectedId] = useState<string>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [openProjectOpen, setOpenProjectOpen] = useState(false);
+  const [openWorkspaceOpen, setOpenWorkspaceOpen] = useState(false);
+  const [saveWorkspaceOpen, setSaveWorkspaceOpen] = useState(false);
 
   const entityIds = useMemo(() => entities.map((e) => e.id), [entities]);
   const { relationships } = useRelationships(entityIds);
+
+  const handleOpenProject = async (path: string) => {
+    try {
+      const response = await fetch('/api/session/project/open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('Open project failed:', error);
+      }
+    } catch (err) {
+      console.error('Open project failed:', err);
+    }
+    setOpenProjectOpen(false);
+  };
+
+  const handleOpenWorkspace = async (projects: { path: string; mode: string }[]) => {
+    // Open each project in the workspace
+    for (const project of projects) {
+      try {
+        const response = await fetch('/api/session/project/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: project.path }),
+        });
+        if (!response.ok) {
+          const error = await response.text();
+          console.error(`Failed to open project ${project.path}:`, error);
+        }
+      } catch (err) {
+        console.error(`Failed to open project ${project.path}:`, err);
+      }
+    }
+    setOpenWorkspaceOpen(false);
+  };
 
   const menus = useMemo(() => [
     {
       label: t('menu.file.label'),
       items: [
-        { label: t('menu.file.newProject'), shortcut: 'Ctrl+N' },
-        { label: t('menu.file.openProject'), shortcut: 'Ctrl+O' },
+        { label: t('menu.file.openProject'), shortcut: 'Ctrl+O', action: () => setOpenProjectOpen(true) },
+        { label: t('menu.file.openWorkspace'), shortcut: 'Ctrl+Shift+O', action: () => setOpenWorkspaceOpen(true) },
         { separator: true as const },
-        { label: t('menu.file.save'), shortcut: 'Ctrl+S', disabled: true },
-        { label: t('menu.file.export'), shortcut: 'Ctrl+Shift+E' },
+        { label: t('menu.file.saveWorkspace'), shortcut: 'Ctrl+S', action: () => setSaveWorkspaceOpen(true) },
         { separator: true as const },
-        { label: t('menu.file.exit'), shortcut: 'Alt+F4' },
-      ],
-    },
-    {
-      label: t('menu.edit.label'),
-      items: [
-        { label: t('menu.edit.undo'), shortcut: 'Ctrl+Z', disabled: true },
-        { label: t('menu.edit.redo'), shortcut: 'Ctrl+Y', disabled: true },
-        { separator: true as const },
-        { label: t('menu.edit.addEntity'), shortcut: 'Ctrl+E' },
-        { label: t('menu.edit.addRelationship'), shortcut: 'Ctrl+R' },
-        { separator: true as const },
-        { label: t('menu.edit.find'), shortcut: 'Ctrl+F' },
-      ],
-    },
-    {
-      label: t('menu.view.label'),
-      items: [
-        { label: t('menu.view.zoomIn'), shortcut: 'Ctrl+=' },
-        { label: t('menu.view.zoomOut'), shortcut: 'Ctrl+-' },
-        { label: t('menu.view.fitToScreen'), shortcut: 'Ctrl+0' },
-        { separator: true as const },
-        { label: t('menu.view.showGrid') },
-        { label: t('menu.view.showLabels') },
-      ],
-    },
-    {
-      label: t('menu.help.label'),
-      items: [
-        { label: t('menu.help.documentation') },
-        { label: t('menu.help.keyboardShortcuts'), shortcut: 'Ctrl+?' },
-        { separator: true as const },
-        { label: t('menu.help.about') },
+        { label: t('menu.file.settings'), shortcut: 'Ctrl+,', action: () => setSettingsOpen(true) },
       ],
     },
   ], [t]);
@@ -113,11 +125,6 @@ function App() {
     <div className={styles.app}>
       <MenuBar menus={menus} workspaceName={t('app.unknownWorkspace')} />
       <div className={styles.appBody}>
-        <Sidebar
-          entities={entities}
-          selectedId={selectedId}
-          onSelect={handleSelect}
-        />
         <main className={styles.mainContent}>
           <EntityGraph
             entities={entities}
@@ -125,8 +132,28 @@ function App() {
             onNodeClick={(id) => setSelectedId(id)}
           />
         </main>
+        <Sidebar
+          entities={entities}
+          selectedId={selectedId}
+          onSelect={handleSelect}
+        />
       </div>
       <StatusBar slots={statusSlots} />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <OpenProjectModal
+        open={openProjectOpen}
+        onClose={() => setOpenProjectOpen(false)}
+        onOpen={handleOpenProject}
+      />
+      <OpenWorkspaceModal
+        open={openWorkspaceOpen}
+        onClose={() => setOpenWorkspaceOpen(false)}
+        onOpen={handleOpenWorkspace}
+      />
+      <SaveWorkspaceModal
+        open={saveWorkspaceOpen}
+        onClose={() => setSaveWorkspaceOpen(false)}
+      />
     </div>
   );
 }

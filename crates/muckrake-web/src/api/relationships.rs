@@ -8,6 +8,7 @@ use muckrake_core::{Relationship, RelationshipData, RelationType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::session::SessionToken;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -55,10 +56,15 @@ pub struct CreateRelationshipRequest {
 
 async fn get_relationship(
     State(state): State<AppState>,
+    session: SessionToken,
     Path(id): Path<Uuid>,
 ) -> Result<Json<RelationshipResponse>, (StatusCode, String)> {
-    let storage = state.storage.read().await;
-    let rel = storage.get_relationship(id).await.map_err(|e| match e {
+    let manager = state.manager.read().await;
+    let project = manager
+        .get_session_project(session.0)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "No active project. Create one first.".to_string()))?;
+
+    let rel = project.storage.get_relationship(id).await.map_err(|e| match e {
         muckrake_core::Error::RelationshipNotFound(_) => {
             (StatusCode::NOT_FOUND, "Relationship not found".to_string())
         }
@@ -70,10 +76,16 @@ async fn get_relationship(
 
 async fn get_entity_relationships(
     State(state): State<AppState>,
+    session: SessionToken,
     Path(entity_id): Path<Uuid>,
 ) -> Result<Json<Vec<RelationshipResponse>>, (StatusCode, String)> {
-    let storage = state.storage.read().await;
-    let rels = storage
+    let manager = state.manager.read().await;
+    let project = manager
+        .get_session_project(session.0)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "No active project. Create one first.".to_string()))?;
+
+    let rels = project
+        .storage
         .get_entity_relationships(entity_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -83,6 +95,7 @@ async fn get_entity_relationships(
 
 async fn create_relationship(
     State(state): State<AppState>,
+    session: SessionToken,
     Json(req): Json<CreateRelationshipRequest>,
 ) -> Result<(StatusCode, Json<RelationshipResponse>), (StatusCode, String)> {
     let mut rel = Relationship::new(req.source_id, req.target_id, req.relation_type)
@@ -95,8 +108,13 @@ async fn create_relationship(
         rel = rel.with_data(data);
     }
 
-    let storage = state.storage.read().await;
-    storage
+    let manager = state.manager.read().await;
+    let project = manager
+        .get_session_project(session.0)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "No active project. Create one first.".to_string()))?;
+
+    project
+        .storage
         .insert_relationship(&rel)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -106,10 +124,15 @@ async fn create_relationship(
 
 async fn delete_relationship(
     State(state): State<AppState>,
+    session: SessionToken,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let storage = state.storage.read().await;
-    storage.delete_relationship(id).await.map_err(|e| match e {
+    let manager = state.manager.read().await;
+    let project = manager
+        .get_session_project(session.0)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "No active project. Create one first.".to_string()))?;
+
+    project.storage.delete_relationship(id).await.map_err(|e| match e {
         muckrake_core::Error::RelationshipNotFound(_) => {
             (StatusCode::NOT_FOUND, "Relationship not found".to_string())
         }
