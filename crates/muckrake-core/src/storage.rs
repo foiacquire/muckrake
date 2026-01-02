@@ -500,6 +500,20 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn list_relationships(&self) -> Result<Vec<Relationship>> {
+        let rows: Vec<RelationshipRow> = sqlx::query_as(
+            r#"
+            SELECT id, source_id, target_id, relation_type, valid_from, valid_to, confidence, data, created_at
+            FROM relationships
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(parse_relationship_row).collect()
+    }
+
     // Evidence operations
 
     pub async fn insert_evidence(&self, evidence: &Evidence) -> Result<()> {

@@ -2,8 +2,9 @@
 resolver = "2"
 members = [
     "crates/muckrake-core",
-    "crates/muckrake-web",
+    "crates/muckrake",
 ]
+default-members = ["crates/muckrake"]
 
 [workspace.package]
 version = "0.1.0"
