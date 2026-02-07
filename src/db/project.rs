@@ -2,10 +2,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
+use sea_query::{
+    Asterisk, CaseStatement, Cond, Expr, ExprTrait, Func, OnConflict, Order, Query,
+    SqliteQueryBuilder,
+};
+use sea_query_rusqlite::RusqliteBinder;
 
 use crate::models::{Category, FileTag, ProtectionLevel, TrackedFile};
 
+use super::iden::{AuditLog, Categories, FileTags, Files, TagToolConfig, ToolConfig};
 use super::schema::PROJECT_SCHEMA;
 
 pub struct ProjectDb {
@@ -32,22 +38,35 @@ impl ProjectDb {
     }
 
     pub fn insert_category(&self, cat: &Category) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO categories (pattern, protection_level, description) VALUES (?1, ?2, ?3)",
-            params![
-                cat.pattern,
-                cat.protection_level.to_string(),
-                cat.description
-            ],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(Categories::Table)
+            .columns([
+                Categories::Pattern,
+                Categories::ProtectionLevel,
+                Categories::Description,
+            ])
+            .values_panic([
+                cat.pattern.as_str().into(),
+                cat.protection_level.to_string().into(),
+                cat.description.clone().into(),
+            ])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn list_categories(&self) -> Result<Vec<Category>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, pattern, protection_level, description FROM categories")?;
-        let rows = stmt.query_map([], |row| {
+        let (sql, values) = Query::select()
+            .columns([
+                Categories::Id,
+                Categories::Pattern,
+                Categories::ProtectionLevel,
+                Categories::Description,
+            ])
+            .from(Categories::Table)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(Category {
                 id: Some(row.get(0)?),
                 pattern: row.get(1)?,
@@ -80,29 +99,41 @@ impl ProjectDb {
     }
 
     pub fn insert_file(&self, file: &TrackedFile) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO files (name, path, sha256, mime_type, size, ingested_at, provenance, immutable)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                file.name,
-                file.path,
-                file.sha256,
-                file.mime_type,
-                file.size,
-                file.ingested_at,
-                file.provenance,
-                i32::from(file.immutable),
-            ],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(Files::Table)
+            .columns([
+                Files::Name,
+                Files::Path,
+                Files::Sha256,
+                Files::MimeType,
+                Files::Size,
+                Files::IngestedAt,
+                Files::Provenance,
+                Files::Immutable,
+            ])
+            .values_panic([
+                file.name.as_str().into(),
+                file.path.as_str().into(),
+                file.sha256.clone().into(),
+                file.mime_type.clone().into(),
+                file.size.into(),
+                file.ingested_at.as_str().into(),
+                file.provenance.clone().into(),
+                i32::from(file.immutable).into(),
+            ])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn get_file_by_name(&self, name: &str) -> Result<Option<TrackedFile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, sha256, mime_type, size, ingested_at, provenance, immutable
-             FROM files WHERE name = ?1",
-        )?;
-        let mut rows = stmt.query_map(params![name], row_to_file)?;
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .and_where(Expr::col(Files::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_file)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -110,11 +141,13 @@ impl ProjectDb {
     }
 
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<TrackedFile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, sha256, mime_type, size, ingested_at, provenance, immutable
-             FROM files WHERE path = ?1",
-        )?;
-        let mut rows = stmt.query_map(params![path], row_to_file)?;
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .and_where(Expr::col(Files::Path).eq(path))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_file)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -122,81 +155,106 @@ impl ProjectDb {
     }
 
     pub fn list_files(&self, path_prefix: Option<&str>) -> Result<Vec<TrackedFile>> {
-        if let Some(prefix) = path_prefix {
-            let pattern = format!("{prefix}%");
-            let mut stmt = self.conn.prepare(
-                "SELECT id, name, path, sha256, mime_type, size, ingested_at, provenance, immutable
-                 FROM files WHERE path LIKE ?1 ORDER BY path",
-            )?;
-            let rows = stmt.query_map(params![pattern], row_to_file)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-        } else {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, name, path, sha256, mime_type, size, ingested_at, provenance, immutable
-                 FROM files ORDER BY path",
-            )?;
-            let rows = stmt.query_map([], row_to_file)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-        }
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .apply_if(path_prefix, |q, prefix| {
+                q.and_where(Expr::col(Files::Path).like(format!("{prefix}%")));
+            })
+            .order_by(Files::Path, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_file)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn list_files_by_tag(&self, tag: &str) -> Result<Vec<TrackedFile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT f.id, f.name, f.path, f.sha256, f.mime_type, f.size, f.ingested_at, f.provenance, f.immutable
-             FROM files f
-             JOIN file_tags ft ON f.id = ft.file_id
-             WHERE ft.tag = ?1
-             ORDER BY f.path",
-        )?;
-        let rows = stmt.query_map(params![tag], row_to_file)?;
+        let (sql, values) = Query::select()
+            .columns([
+                (Files::Table, Files::Id),
+                (Files::Table, Files::Name),
+                (Files::Table, Files::Path),
+                (Files::Table, Files::Sha256),
+                (Files::Table, Files::MimeType),
+                (Files::Table, Files::Size),
+                (Files::Table, Files::IngestedAt),
+                (Files::Table, Files::Provenance),
+                (Files::Table, Files::Immutable),
+            ])
+            .from(Files::Table)
+            .inner_join(
+                FileTags::Table,
+                Expr::col((Files::Table, Files::Id)).equals((FileTags::Table, FileTags::FileId)),
+            )
+            .and_where(Expr::col((FileTags::Table, FileTags::Tag)).eq(tag))
+            .order_by((Files::Table, Files::Path), Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_file)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn update_file_path(&self, file_id: i64, new_path: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE files SET path = ?1 WHERE id = ?2",
-            params![new_path, file_id],
-        )?;
+        let (sql, values) = Query::update()
+            .table(Files::Table)
+            .value(Files::Path, new_path)
+            .and_where(Expr::col(Files::Id).eq(file_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
     }
 
     pub fn update_file_immutable(&self, file_id: i64, immutable: bool) -> Result<()> {
-        self.conn.execute(
-            "UPDATE files SET immutable = ?1 WHERE id = ?2",
-            params![i32::from(immutable), file_id],
-        )?;
+        let (sql, values) = Query::update()
+            .table(Files::Table)
+            .value(Files::Immutable, i32::from(immutable))
+            .and_where(Expr::col(Files::Id).eq(file_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
     }
 
     pub fn insert_tag(&self, file_id: i64, tag: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO file_tags (file_id, tag) VALUES (?1, ?2)",
-            params![file_id, tag],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(FileTags::Table)
+            .columns([FileTags::FileId, FileTags::Tag])
+            .values_panic([file_id.into(), tag.into()])
+            .on_conflict(OnConflict::new().do_nothing().to_owned())
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
     }
 
     pub fn remove_tag(&self, file_id: i64, tag: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM file_tags WHERE file_id = ?1 AND tag = ?2",
-            params![file_id, tag],
-        )?;
+        let (sql, values) = Query::delete()
+            .from_table(FileTags::Table)
+            .and_where(Expr::col(FileTags::FileId).eq(file_id))
+            .and_where(Expr::col(FileTags::Tag).eq(tag))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
     }
 
     pub fn get_tags(&self, file_id: i64) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT tag FROM file_tags WHERE file_id = ?1 ORDER BY tag")?;
-        let rows = stmt.query_map(params![file_id], |row| row.get(0))?;
+        let (sql, values) = Query::select()
+            .column(FileTags::Tag)
+            .from(FileTags::Table)
+            .and_where(Expr::col(FileTags::FileId).eq(file_id))
+            .order_by(FileTags::Tag, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn list_all_tags(&self) -> Result<Vec<FileTag>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT file_id, tag FROM file_tags ORDER BY tag")?;
-        let rows = stmt.query_map([], |row| {
+        let (sql, values) = Query::select()
+            .columns([FileTags::FileId, FileTags::Tag])
+            .from(FileTags::Table)
+            .order_by(FileTags::Tag, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(FileTag {
                 file_id: row.get(0)?,
                 tag: row.get(1)?,
@@ -213,10 +271,24 @@ impl ProjectDb {
         detail: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "INSERT INTO audit_log (timestamp, operation, file_id, user, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![now, operation, file_id, user, detail],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(AuditLog::Table)
+            .columns([
+                AuditLog::Timestamp,
+                AuditLog::Operation,
+                AuditLog::FileId,
+                AuditLog::User,
+                AuditLog::Detail,
+            ])
+            .values_panic([
+                now.into(),
+                operation.into(),
+                file_id.into(),
+                user.map(String::from).into(),
+                detail.map(String::from).into(),
+            ])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
     }
 
@@ -226,15 +298,48 @@ impl ProjectDb {
         action: &str,
         file_type: &str,
     ) -> Result<Option<ToolConfigRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, scope, action, file_type, command, env FROM tool_config
-             WHERE (scope = ?1 OR scope IS NULL) AND action = ?2 AND (file_type = ?3 OR file_type = '*')
-             ORDER BY
-                CASE WHEN scope IS NOT NULL THEN 0 ELSE 1 END,
-                CASE WHEN file_type = '*' THEN 1 ELSE 0 END
-             LIMIT 1",
-        )?;
-        let mut rows = stmt.query_map(params![scope, action, file_type], |row| {
+        let (sql, values) = Query::select()
+            .columns([
+                ToolConfig::Id,
+                ToolConfig::Scope,
+                ToolConfig::Action,
+                ToolConfig::FileType,
+                ToolConfig::Command,
+                ToolConfig::Env,
+            ])
+            .from(ToolConfig::Table)
+            .cond_where(
+                Cond::all()
+                    .add(
+                        Cond::any()
+                            .add(Expr::col(ToolConfig::Scope).eq(scope.map(String::from)))
+                            .add(Expr::col(ToolConfig::Scope).is_null()),
+                    )
+                    .add(Expr::col(ToolConfig::Action).eq(action))
+                    .add(
+                        Cond::any()
+                            .add(Expr::col(ToolConfig::FileType).eq(file_type))
+                            .add(Expr::col(ToolConfig::FileType).eq("*")),
+                    ),
+            )
+            .order_by_expr(
+                CaseStatement::new()
+                    .case(Expr::col(ToolConfig::Scope).is_not_null(), 0)
+                    .finally(1)
+                    .into(),
+                Order::Asc,
+            )
+            .order_by_expr(
+                CaseStatement::new()
+                    .case(Expr::col(ToolConfig::FileType).eq("*"), 1)
+                    .finally(0)
+                    .into(),
+                Order::Asc,
+            )
+            .limit(1)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(ToolConfigRow {
                 id: row.get(0)?,
                 scope: row.get(1)?,
@@ -259,30 +364,28 @@ impl ProjectDb {
         if tags.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders: Vec<String> = tags
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 3))
-            .collect();
-        let sql = format!(
-            "SELECT id, tag, action, file_type, command, env FROM tag_tool_config
-             WHERE tag IN ({}) AND action = ?1 AND (file_type = ?2 OR file_type = '*')
-             ORDER BY tag",
-            placeholders.join(", ")
-        );
+        let tag_values: Vec<sea_query::Value> = tags.iter().map(|t| t.as_str().into()).collect();
+        let (sql, values) = Query::select()
+            .columns([
+                TagToolConfig::Id,
+                TagToolConfig::Tag,
+                TagToolConfig::Action,
+                TagToolConfig::FileType,
+                TagToolConfig::Command,
+                TagToolConfig::Env,
+            ])
+            .from(TagToolConfig::Table)
+            .and_where(Expr::col(TagToolConfig::Tag).is_in(tag_values))
+            .and_where(Expr::col(TagToolConfig::Action).eq(action))
+            .cond_where(
+                Cond::any()
+                    .add(Expr::col(TagToolConfig::FileType).eq(file_type))
+                    .add(Expr::col(TagToolConfig::FileType).eq("*")),
+            )
+            .order_by(TagToolConfig::Tag, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-            Box::new(action.to_string()),
-            Box::new(file_type.to_string()),
-        ];
-        for tag in tags {
-            param_values.push(Box::new(tag.clone()));
-        }
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect();
-        let rows = stmt.query_map(params_ref.as_slice(), |row| {
+        let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(TagToolConfigRow {
                 id: row.get(0)?,
                 tag: row.get(1)?,
@@ -296,36 +399,63 @@ impl ProjectDb {
     }
 
     pub fn file_count(&self) -> Result<i64> {
+        let (sql, values) = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from(Files::Table)
+            .build_rusqlite(SqliteQueryBuilder);
         Ok(self
             .conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?)
+            .query_row(&sql, &*values.as_params(), |row| row.get(0))?)
     }
 
     pub fn category_count(&self) -> Result<i64> {
+        let (sql, values) = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from(Categories::Table)
+            .build_rusqlite(SqliteQueryBuilder);
         Ok(self
             .conn
-            .query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0))?)
+            .query_row(&sql, &*values.as_params(), |row| row.get(0))?)
     }
 
     pub fn tag_count(&self) -> Result<i64> {
+        let (sql, values) = Query::select()
+            .expr(Func::count_distinct(Expr::col(FileTags::Tag)))
+            .from(FileTags::Table)
+            .build_rusqlite(SqliteQueryBuilder);
         Ok(self
             .conn
-            .query_row("SELECT COUNT(DISTINCT tag) FROM file_tags", [], |row| {
-                row.get(0)
-            })?)
+            .query_row(&sql, &*values.as_params(), |row| row.get(0))?)
     }
 
     pub fn last_verify_time(&self) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT timestamp FROM audit_log WHERE operation = 'verify' ORDER BY timestamp DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query_map([], |row| row.get(0))?;
+        let (sql, values) = Query::select()
+            .column(AuditLog::Timestamp)
+            .from(AuditLog::Table)
+            .and_where(Expr::col(AuditLog::Operation).eq("verify"))
+            .order_by(AuditLog::Timestamp, Order::Desc)
+            .limit(1)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| row.get(0))?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
     }
 }
+
+const FILE_COLUMNS: [Files; 9] = [
+    Files::Id,
+    Files::Name,
+    Files::Path,
+    Files::Sha256,
+    Files::MimeType,
+    Files::Size,
+    Files::IngestedAt,
+    Files::Provenance,
+    Files::Immutable,
+];
 
 fn row_to_file(row: &rusqlite::Row) -> rusqlite::Result<TrackedFile> {
     Ok(TrackedFile {

@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+mod iden;
 pub mod project;
 mod schema;
 pub mod workspace;

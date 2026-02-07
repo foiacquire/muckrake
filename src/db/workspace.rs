@@ -2,10 +2,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
+use sea_query::{
+    Asterisk, CaseStatement, Cond, Expr, ExprTrait, Func, OnConflict, Order, Query,
+    SqliteQueryBuilder,
+};
+use sea_query_rusqlite::RusqliteBinder;
 
 use crate::models::{Category, ProtectionLevel};
 
+use super::iden::{DefaultCategories, Projects, TagToolConfig, ToolConfig, WorkspaceConfig};
 use super::schema::WORKSPACE_SCHEMA;
 
 pub struct WorkspaceDb {
@@ -32,10 +38,13 @@ impl WorkspaceDb {
     }
 
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT value FROM workspace_config WHERE key = ?1")?;
-        let mut rows = stmt.query_map(params![key], |row| row.get(0))?;
+        let (sql, values) = Query::select()
+            .column(WorkspaceConfig::Value)
+            .from(WorkspaceConfig::Table)
+            .and_where(Expr::col(WorkspaceConfig::Key).eq(key))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| row.get(0))?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -43,10 +52,17 @@ impl WorkspaceDb {
     }
 
     pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO workspace_config (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(WorkspaceConfig::Table)
+            .columns([WorkspaceConfig::Key, WorkspaceConfig::Value])
+            .values_panic([key.into(), value.into()])
+            .on_conflict(
+                OnConflict::column(WorkspaceConfig::Key)
+                    .update_column(WorkspaceConfig::Value)
+                    .to_owned(),
+            )
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
     }
 
@@ -57,18 +73,39 @@ impl WorkspaceDb {
         description: Option<&str>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "INSERT INTO projects (name, path, description, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![name, path, description, now],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(Projects::Table)
+            .columns([
+                Projects::Name,
+                Projects::Path,
+                Projects::Description,
+                Projects::CreatedAt,
+            ])
+            .values_panic([
+                name.into(),
+                path.into(),
+                description.map(String::from).into(),
+                now.into(),
+            ])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, description, created_at FROM projects ORDER BY name",
-        )?;
-        let rows = stmt.query_map([], |row| {
+        let (sql, values) = Query::select()
+            .columns([
+                Projects::Id,
+                Projects::Name,
+                Projects::Path,
+                Projects::Description,
+                Projects::CreatedAt,
+            ])
+            .from(Projects::Table)
+            .order_by(Projects::Name, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(ProjectRow {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -81,10 +118,19 @@ impl WorkspaceDb {
     }
 
     pub fn get_project_by_name(&self, name: &str) -> Result<Option<ProjectRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, description, created_at FROM projects WHERE name = ?1",
-        )?;
-        let mut rows = stmt.query_map(params![name], |row| {
+        let (sql, values) = Query::select()
+            .columns([
+                Projects::Id,
+                Projects::Name,
+                Projects::Path,
+                Projects::Description,
+                Projects::CreatedAt,
+            ])
+            .from(Projects::Table)
+            .and_where(Expr::col(Projects::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(ProjectRow {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -100,18 +146,35 @@ impl WorkspaceDb {
     }
 
     pub fn insert_default_category(&self, cat: &Category) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO default_categories (pattern, protection_level, description) VALUES (?1, ?2, ?3)",
-            params![cat.pattern, cat.protection_level.to_string(), cat.description],
-        )?;
+        let (sql, values) = Query::insert()
+            .into_table(DefaultCategories::Table)
+            .columns([
+                DefaultCategories::Pattern,
+                DefaultCategories::ProtectionLevel,
+                DefaultCategories::Description,
+            ])
+            .values_panic([
+                cat.pattern.as_str().into(),
+                cat.protection_level.to_string().into(),
+                cat.description.clone().into(),
+            ])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn list_default_categories(&self) -> Result<Vec<Category>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, pattern, protection_level, description FROM default_categories")?;
-        let rows = stmt.query_map([], |row| {
+        let (sql, values) = Query::select()
+            .columns([
+                DefaultCategories::Id,
+                DefaultCategories::Pattern,
+                DefaultCategories::ProtectionLevel,
+                DefaultCategories::Description,
+            ])
+            .from(DefaultCategories::Table)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(Category {
                 id: Some(row.get(0)?),
                 pattern: row.get(1)?,
@@ -126,9 +189,13 @@ impl WorkspaceDb {
     }
 
     pub fn project_count(&self) -> Result<i64> {
+        let (sql, values) = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from(Projects::Table)
+            .build_rusqlite(SqliteQueryBuilder);
         Ok(self
             .conn
-            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))?)
+            .query_row(&sql, &*values.as_params(), |row| row.get(0))?)
     }
 
     pub fn get_tool_config(
@@ -137,15 +204,48 @@ impl WorkspaceDb {
         action: &str,
         file_type: &str,
     ) -> Result<Option<super::project::ToolConfigRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, scope, action, file_type, command, env FROM tool_config
-             WHERE (scope = ?1 OR scope IS NULL) AND action = ?2 AND (file_type = ?3 OR file_type = '*')
-             ORDER BY
-                CASE WHEN scope IS NOT NULL THEN 0 ELSE 1 END,
-                CASE WHEN file_type = '*' THEN 1 ELSE 0 END
-             LIMIT 1",
-        )?;
-        let mut rows = stmt.query_map(params![scope, action, file_type], |row| {
+        let (sql, values) = Query::select()
+            .columns([
+                ToolConfig::Id,
+                ToolConfig::Scope,
+                ToolConfig::Action,
+                ToolConfig::FileType,
+                ToolConfig::Command,
+                ToolConfig::Env,
+            ])
+            .from(ToolConfig::Table)
+            .cond_where(
+                Cond::all()
+                    .add(
+                        Cond::any()
+                            .add(Expr::col(ToolConfig::Scope).eq(scope.map(String::from)))
+                            .add(Expr::col(ToolConfig::Scope).is_null()),
+                    )
+                    .add(Expr::col(ToolConfig::Action).eq(action))
+                    .add(
+                        Cond::any()
+                            .add(Expr::col(ToolConfig::FileType).eq(file_type))
+                            .add(Expr::col(ToolConfig::FileType).eq("*")),
+                    ),
+            )
+            .order_by_expr(
+                CaseStatement::new()
+                    .case(Expr::col(ToolConfig::Scope).is_not_null(), 0)
+                    .finally(1)
+                    .into(),
+                Order::Asc,
+            )
+            .order_by_expr(
+                CaseStatement::new()
+                    .case(Expr::col(ToolConfig::FileType).eq("*"), 1)
+                    .finally(0)
+                    .into(),
+                Order::Asc,
+            )
+            .limit(1)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(super::project::ToolConfigRow {
                 id: row.get(0)?,
                 scope: row.get(1)?,
@@ -170,30 +270,28 @@ impl WorkspaceDb {
         if tags.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders: Vec<String> = tags
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 3))
-            .collect();
-        let sql = format!(
-            "SELECT id, tag, action, file_type, command, env FROM tag_tool_config
-             WHERE tag IN ({}) AND action = ?1 AND (file_type = ?2 OR file_type = '*')
-             ORDER BY tag",
-            placeholders.join(", ")
-        );
+        let tag_values: Vec<sea_query::Value> = tags.iter().map(|t| t.as_str().into()).collect();
+        let (sql, values) = Query::select()
+            .columns([
+                TagToolConfig::Id,
+                TagToolConfig::Tag,
+                TagToolConfig::Action,
+                TagToolConfig::FileType,
+                TagToolConfig::Command,
+                TagToolConfig::Env,
+            ])
+            .from(TagToolConfig::Table)
+            .and_where(Expr::col(TagToolConfig::Tag).is_in(tag_values))
+            .and_where(Expr::col(TagToolConfig::Action).eq(action))
+            .cond_where(
+                Cond::any()
+                    .add(Expr::col(TagToolConfig::FileType).eq(file_type))
+                    .add(Expr::col(TagToolConfig::FileType).eq("*")),
+            )
+            .order_by(TagToolConfig::Tag, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-            Box::new(action.to_string()),
-            Box::new(file_type.to_string()),
-        ];
-        for tag in tags {
-            param_values.push(Box::new(tag.clone()));
-        }
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
-            .iter()
-            .map(std::convert::AsRef::as_ref)
-            .collect();
-        let rows = stmt.query_map(params_ref.as_slice(), |row| {
+        let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(super::project::TagToolConfigRow {
                 id: row.get(0)?,
                 tag: row.get(1)?,
