@@ -1,0 +1,146 @@
+use std::path::Path;
+
+use anyhow::{bail, Result};
+use chrono::Utc;
+
+use crate::context::{discover, Context};
+use crate::db::ProjectDb;
+use crate::integrity;
+use crate::models::{ProtectionLevel, TrackedFile};
+
+pub fn run(cwd: &Path, paths: &[String], category: Option<&str>) -> Result<()> {
+    let ctx = discover(cwd)?;
+    let Context::Project {
+        project_root,
+        project_db,
+        ..
+    } = ctx
+    else {
+        bail!("must be inside a project to ingest files");
+    };
+
+    for path_str in paths {
+        ingest_one(&project_root, &project_db, Path::new(path_str), category)?;
+    }
+
+    Ok(())
+}
+
+fn ingest_one(
+    project_root: &Path,
+    db: &ProjectDb,
+    source: &Path,
+    category: Option<&str>,
+) -> Result<()> {
+    if !source.exists() {
+        bail!("file not found: {}", source.display());
+    }
+    if !source.is_file() {
+        bail!("not a regular file: {}", source.display());
+    }
+
+    let file_name = source.file_name().map_or_else(
+        || "unnamed".to_string(),
+        |n| n.to_string_lossy().to_string(),
+    );
+
+    let rel_path = match category {
+        Some(cat) => format!("{cat}/{file_name}"),
+        None => file_name.clone(),
+    };
+
+    let dest = project_root.join(&rel_path);
+
+    if dest.exists() {
+        bail!("destination already exists: {}", dest.display());
+    }
+
+    if db.get_file_by_name(&file_name)?.is_some() {
+        bail!("file '{file_name}' already registered in project");
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(source, &dest)?;
+
+    let hash = integrity::hash_file(&dest)?;
+    let size = std::fs::metadata(&dest)?.len();
+    let mime_type = guess_mime(&file_name);
+
+    let matched_category = db.match_category(&rel_path)?;
+    let protection = matched_category
+        .as_ref()
+        .map(|c| &c.protection_level)
+        .cloned()
+        .unwrap_or(ProtectionLevel::Editable);
+
+    let mut is_immutable = false;
+    if protection == ProtectionLevel::Immutable {
+        match integrity::set_immutable(&dest) {
+            Ok(()) => is_immutable = true,
+            Err(e) => {
+                eprintln!("  warning: could not set immutable flag: {e}");
+            }
+        }
+    }
+
+    let provenance = serde_json::json!({
+        "source": source.display().to_string(),
+        "method": "ingest",
+        "timestamp": Utc::now().to_rfc3339(),
+    });
+
+    let file = TrackedFile {
+        id: None,
+        name: file_name,
+        path: rel_path.clone(),
+        sha256: Some(hash),
+        mime_type,
+        size: Some(size as i64),
+        ingested_at: Utc::now().to_rfc3339(),
+        provenance: Some(provenance.to_string()),
+        immutable: is_immutable,
+    };
+
+    let file_id = db.insert_file(&file)?;
+    let user = whoami();
+    db.insert_audit("ingest", Some(file_id), Some(&user), None)?;
+
+    eprintln!("Ingested: {} -> {}", source.display(), rel_path);
+    eprintln!("  Protection: {protection}");
+
+    Ok(())
+}
+
+fn guess_mime(filename: &str) -> Option<String> {
+    let ext = filename.rsplit('.').next()?.to_lowercase();
+    let mime = match ext.as_str() {
+        "pdf" => "application/pdf",
+        "doc" | "docx" => "application/msword",
+        "xls" | "xlsx" => "application/vnd.ms-excel",
+        "csv" => "text/csv",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "tiff" | "tif" => "image/tiff",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
+        "mkv" => "video/x-matroska",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        _ => return None,
+    };
+    Some(mime.to_string())
+}
+
+fn whoami() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}

@@ -1,11 +1,6 @@
 /target
 Cargo.lock
-.claude/
-
-# Frontend
-node_modules/
-crates/muckrake-web/static/
-
-# Database
-*.db
-*.db-journal
+*.swp
+*.swo
+*~
+.DS_Store

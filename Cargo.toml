@@ -1,70 +1,39 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/muckrake-core",
-    "crates/muckrake",
-]
-default-members = ["crates/muckrake"]
-
-[workspace.package]
+[package]
+name = "muckrake"
 version = "0.1.0"
 edition = "2021"
-authors = ["monokrome <monokrome@monokro.me>"]
-license = "MIT"
+authors = ["Bailey \"monokrome\" Stoner <monokrome@monokro.me>"]
+license = "BSD-2-Clause"
 repository = "https://github.com/monokrome/muckrake"
+description = "Investigative journalism research management CLI"
 
-[workspace.dependencies]
-# Async
-tokio = { version = "1", features = ["full"] }
+[[bin]]
+name = "mkrk"
+path = "src/main.rs"
 
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json"] }
-
-# Serialization
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Error handling
-thiserror = "2"
-anyhow = "1"
-
-# IDs
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
-
-# Time
-chrono = { version = "0.4", features = ["serde"] }
-
-# Fuzzy matching
-strsim = "0.11"
-
-# Graph
-petgraph = "0.7"
-
-# Logging
+sha2 = "0.10"
+hex = "0.4"
+glob = "0.3"
+console = "0.15"
+dialoguer = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Web
-axum = { version = "0.8", features = ["macros"] }
-axum-extra = { version = "0.10", features = ["cookie"] }
-tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+[dev-dependencies]
+tempfile = "3"
 
-# HTTP Client
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks", "json", "gzip", "brotli"] }
-url = "2"
-
-# Utilities
-rand = "0.9"
-which = "7"
-dirs = "6"
-regex = "1"
-async-trait = "0.1"
-
-[workspace.lints.rust]
+[lints.rust]
 unsafe_code = "deny"
 
-[workspace.lints.clippy]
+[lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }

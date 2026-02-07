@@ -1,2 +1,0 @@
-[alias]
-web = "run --release -p muckrake-web --"

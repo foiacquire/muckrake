@@ -1,25 +1,28 @@
 {
-  "crates/*/src/*.rs": {
-    "type": "source",
-    "alternate": "crates/{}/tests/{}.rs"
+  "src/*.rs": {
+    "alternate": "src/{}.rs",
+    "type": "source"
   },
-  "crates/*/tests/*.rs": {
-    "type": "test",
-    "alternate": "crates/{}/src/{}.rs"
+  "src/**/*.rs": {
+    "alternate": "src/{}.rs",
+    "type": "source"
   },
-  "crates/muckrake-core/src/lib.rs": {
-    "type": "lib"
+  "src/cli/*.rs": {
+    "type": "command"
   },
-  "crates/muckrake-core/src/entity.rs": {
-    "type": "entity"
+  "src/db/*.rs": {
+    "type": "db"
   },
-  "crates/muckrake-core/src/relationship.rs": {
-    "type": "relationship"
+  "src/models/*.rs": {
+    "type": "model"
   },
-  "crates/muckrake-core/src/storage.rs": {
-    "type": "storage"
+  "src/context/*.rs": {
+    "type": "context"
   },
-  "crates/muckrake-core/src/error.rs": {
-    "type": "error"
+  "src/integrity/*.rs": {
+    "type": "integrity"
+  },
+  "src/tools/*.rs": {
+    "type": "tool"
   }
 }
