@@ -4,4 +4,5 @@ use serde::{Deserialize, Serialize};
 pub struct FileTag {
     pub file_id: i64,
     pub tag: String,
+    pub file_hash: Option<String>,
 }

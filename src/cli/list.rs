@@ -1,117 +1,82 @@
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use console::style;
 
-use crate::context::{discover, Context, Scope};
-use crate::db::{ProjectDb, ProjectRow, WorkspaceDb};
+use crate::context::discover;
+use crate::models::TrackedFile;
+use crate::reference::{parse_reference, resolve_references, Reference};
 
-pub fn run(cwd: &Path, scope: &Scope, tag: Option<&str>) -> Result<()> {
+pub fn run(cwd: &Path, raw_refs: &[String]) -> Result<()> {
     let ctx = discover(cwd)?;
 
-    match (&ctx, scope) {
-        (Context::Project { project_db, .. }, Scope::Current) => {
-            let files = query_files(project_db, None, tag)?;
-            print_files(&files);
-        }
-        (Context::Project { project_db, .. }, Scope::Project { path, .. }) => {
-            let prefix = if path.is_empty() {
-                None
-            } else {
-                Some(format!("{}/", path.join("/")))
-            };
-            let files = query_files(project_db, prefix.as_deref(), tag)?;
-            print_files(&files);
-        }
-        (
-            Context::Project {
-                workspace: Some(ws),
-                ..
-            },
-            Scope::Workspace,
-        ) => {
-            list_workspace_files(&ws.workspace_db, &ws.workspace_root, tag)?;
-        }
-        (
-            Context::Workspace {
-                workspace_db,
-                workspace_root,
-                ..
-            },
-            _,
-        ) => {
-            list_workspace_files(workspace_db, workspace_root, tag)?;
-        }
-        (Context::None, _) => {
-            bail!("not in a muckrake project or workspace");
-        }
-        _ => {
-            bail!("scope not applicable in this context");
-        }
-    }
-
-    Ok(())
-}
-
-fn query_files(
-    db: &ProjectDb,
-    prefix: Option<&str>,
-    tag: Option<&str>,
-) -> Result<Vec<crate::models::TrackedFile>> {
-    if let Some(t) = tag {
-        let mut all = db.list_files_by_tag(t)?;
-        if let Some(pfx) = prefix {
-            all.retain(|f| f.path.starts_with(pfx));
-        }
-        Ok(all)
+    let refs = if raw_refs.is_empty() {
+        vec![Reference::Structured {
+            scope: vec![],
+            tags: vec![],
+            glob: None,
+        }]
     } else {
-        db.list_files(prefix)
-    }
-}
+        raw_refs
+            .iter()
+            .map(|r| parse_reference(r))
+            .collect::<Result<Vec<_>>>()?
+    };
 
-fn list_workspace_files(
-    workspace_db: &WorkspaceDb,
-    workspace_root: &Path,
-    tag: Option<&str>,
-) -> Result<()> {
-    let projects = workspace_db.list_projects()?;
-    for proj in &projects {
-        print_project_files(workspace_root, proj, tag)?;
-    }
-    Ok(())
-}
+    let collection = resolve_references(&refs, &ctx)?;
 
-fn print_project_files(workspace_root: &Path, proj: &ProjectRow, tag: Option<&str>) -> Result<()> {
-    let mkrk = workspace_root.join(&proj.path).join(".mkrk");
-    if !mkrk.exists() {
+    if collection.files.is_empty() {
+        eprintln!("  (no files)");
         return Ok(());
     }
-    let proj_db = ProjectDb::open(&mkrk)?;
-    let files = query_files(&proj_db, None, tag)?;
-    if !files.is_empty() {
-        eprintln!("{}:", style(&proj.name).bold());
-        print_files(&files);
+
+    let mut current_project: Option<&Option<String>> = None;
+    let mut has_multiple_projects = false;
+
+    for rf in &collection.files {
+        if let Some(prev) = current_project {
+            if prev != &rf.project_name {
+                has_multiple_projects = true;
+                break;
+            }
+        } else {
+            current_project = Some(&rf.project_name);
+        }
     }
+
+    if has_multiple_projects {
+        let mut last_project: Option<&Option<String>> = None;
+        for rf in &collection.files {
+            if last_project != Some(&rf.project_name) {
+                if let Some(ref name) = rf.project_name {
+                    eprintln!("{}:", style(name).bold());
+                }
+                last_project = Some(&rf.project_name);
+            }
+            print_file(&rf.file);
+        }
+    } else {
+        if let Some(Some(ref name)) = collection.files.first().map(|f| &f.project_name) {
+            eprintln!("{}:", style(name).bold());
+        }
+        for rf in &collection.files {
+            print_file(&rf.file);
+        }
+    }
+
     Ok(())
 }
 
-fn print_files(files: &[crate::models::TrackedFile]) {
-    if files.is_empty() {
-        eprintln!("  (no files)");
-        return;
-    }
-
-    for f in files {
-        let protection = if f.immutable { "immutable" } else { "editable" };
-        let size = f.size.map_or_else(|| "?".to_string(), format_size);
-        eprintln!(
-            "  {} {} [{}] {}",
-            style(&f.name).bold(),
-            style(&f.path).dim(),
-            protection,
-            style(size).dim()
-        );
-    }
+fn print_file(f: &TrackedFile) {
+    let protection = if f.immutable { "immutable" } else { "editable" };
+    let size = f.size.map_or_else(|| "?".to_string(), format_size);
+    eprintln!(
+        "  {} {} [{}] {}",
+        style(&f.name).bold(),
+        style(&f.path).dim(),
+        protection,
+        style(size).dim()
+    );
 }
 
 fn format_size(bytes: i64) -> String {

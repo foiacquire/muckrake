@@ -6,28 +6,32 @@ use console::style;
 use crate::context::{discover, Context};
 use crate::integrity::{self, VerifyResult};
 use crate::models::TrackedFile;
+use crate::reference::{parse_reference, resolve_references};
+use crate::util::whoami;
 
-pub fn run(cwd: &Path, name: Option<&str>) -> Result<()> {
+pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let Context::Project {
         project_root,
         project_db,
         ..
-    } = ctx
+    } = &ctx
     else {
         bail!("must be inside a project to verify files");
     };
 
-    let files = if let Some(n) = name {
-        let f = project_db
-            .get_file_by_name(n)?
-            .ok_or_else(|| anyhow::anyhow!("file '{n}' not found"))?;
-        vec![f]
+    let files = if let Some(r) = reference {
+        let parsed = parse_reference(r)?;
+        let collection = resolve_references(&[parsed], &ctx)?;
+        if collection.files.is_empty() {
+            bail!("reference '{r}' matched no files");
+        }
+        collection.files.into_iter().map(|rf| rf.file).collect()
     } else {
         project_db.list_files(None)?
     };
 
-    let counts = verify_files(&project_root, &files)?;
+    let counts = verify_files(project_root, &files)?;
 
     eprintln!();
     eprintln!(
@@ -114,10 +118,4 @@ fn check_immutable_flag(file: &TrackedFile, file_path: &Path) {
             file.path
         );
     }
-}
-
-fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
 }

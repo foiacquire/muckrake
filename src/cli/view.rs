@@ -5,45 +5,57 @@ use anyhow::{bail, Result};
 
 use crate::context::{discover, Context};
 use crate::models::ProtectionLevel;
+use crate::reference::{parse_reference, resolve_references};
 use crate::tools;
+use crate::util::whoami;
 
-pub fn run_view(cwd: &Path, name: &str) -> Result<()> {
-    run_open(cwd, name, "view")
+pub fn run_view(cwd: &Path, reference: &str) -> Result<()> {
+    run_open(cwd, reference, "view")
 }
 
-pub fn run_edit(cwd: &Path, name: &str) -> Result<()> {
-    run_open(cwd, name, "edit")
+pub fn run_edit(cwd: &Path, reference: &str) -> Result<()> {
+    run_open(cwd, reference, "edit")
 }
 
-fn run_open(cwd: &Path, name: &str, action: &str) -> Result<()> {
+fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (project_root, project_db, workspace_db) = match ctx {
+    let (project_root, project_db, workspace_db) = match &ctx {
         Context::Project {
             project_root,
             project_db,
             workspace,
         } => {
-            let ws = workspace.map(|w| w.workspace_db);
-            (project_root, project_db, ws)
+            let ws = workspace.as_ref().map(|w| &w.workspace_db);
+            (project_root.clone(), project_db, ws)
         }
         _ => bail!("must be inside a project to {action} files"),
     };
 
-    let file = project_db
-        .get_file_by_name(name)?
-        .ok_or_else(|| anyhow::anyhow!("file '{name}' not found in project"))?;
+    let parsed = parse_reference(reference)?;
+    let collection = resolve_references(&[parsed], &ctx)?;
+    let resolved = collection.expect_one(reference)?;
+    let file = resolved.file;
 
     let file_path = project_root.join(&file.path);
     if !file_path.exists() {
         bail!("file missing from disk: {}", file.path);
     }
 
-    let protection = check_edit_permission(&project_db, &file.path, name, action)?;
+    let protection = project_db.resolve_protection(&file.path)?;
 
-    let command_str = resolve_open_tool(&file, action, &project_db, workspace_db.as_ref())?;
-    let target_path = resolve_open_path(&file_path, action, &protection)?;
+    if action == "edit" && protection == ProtectionLevel::Immutable {
+        bail!("cannot edit immutable file '{}'", file.name);
+    }
 
-    let env_map = tools::build_tool_env(None, &command_str);
+    if action == "edit" && protection == ProtectionLevel::Protected {
+        eprintln!("Warning: editing protected file '{}'", file.name);
+    }
+
+    let (command_str, env_json) = resolve_tool_for_file(&file, action, project_db, workspace_db)?;
+    let env_map = tools::build_tool_env(env_json.as_deref(), &command_str);
+
+    let target_path = resolve_open_path(&file_path, action, protection)?;
+
     let mut cmd = Command::new(&command_str);
     cmd.arg(&target_path);
     tools::apply_env(&mut cmd, &env_map);
@@ -64,35 +76,12 @@ fn run_open(cwd: &Path, name: &str, action: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_edit_permission(
-    db: &crate::db::ProjectDb,
-    rel_path: &str,
-    name: &str,
-    action: &str,
-) -> Result<ProtectionLevel> {
-    let matched_cat = db.match_category(rel_path)?;
-    let protection = matched_cat
-        .as_ref()
-        .map(|c| &c.protection_level)
-        .cloned()
-        .unwrap_or(ProtectionLevel::Editable);
-
-    if action == "edit" && protection == ProtectionLevel::Immutable {
-        bail!("cannot edit immutable file '{name}'");
-    }
-    if action == "edit" && protection == ProtectionLevel::Protected {
-        eprintln!("Warning: editing protected file '{name}'");
-    }
-
-    Ok(protection)
-}
-
-fn resolve_open_tool(
+fn resolve_tool_for_file(
     file: &crate::models::TrackedFile,
     action: &str,
     project_db: &crate::db::ProjectDb,
     workspace_db: Option<&crate::db::WorkspaceDb>,
-) -> Result<String> {
+) -> Result<(String, Option<String>)> {
     let file_ext = file.name.rsplit('.').next().unwrap_or("*");
     let tags = file
         .id
@@ -100,7 +89,7 @@ fn resolve_open_tool(
         .transpose()?
         .unwrap_or_default();
 
-    let scope_chain = build_scope_chain(&file.path);
+    let scope_chain = tools::build_scope_chain(&file.path);
     let scope_refs: Vec<Option<&str>> = scope_chain.iter().map(|s| s.as_deref()).collect();
 
     let lookup = tools::ToolLookup {
@@ -111,16 +100,19 @@ fn resolve_open_tool(
     };
     let tool = tools::resolve_tool(&lookup, project_db, workspace_db)?;
 
-    Ok(match &tool {
+    let command_str = match &tool {
         Some(t) => t.command.clone(),
         None => tools::default_tool(action),
-    })
+    };
+    let env_json = tool.and_then(|t| t.env);
+
+    Ok((command_str, env_json))
 }
 
 fn resolve_open_path(
     file_path: &Path,
     action: &str,
-    protection: &ProtectionLevel,
+    protection: ProtectionLevel,
 ) -> Result<std::path::PathBuf> {
     match (action, protection) {
         ("view", ProtectionLevel::Immutable | ProtectionLevel::Protected) => {
@@ -143,23 +135,4 @@ fn is_temp_path(target: &Path, original: &Path) -> Option<std::path::PathBuf> {
     } else {
         Some(target.to_path_buf())
     }
-}
-
-fn build_scope_chain(rel_path: &str) -> Vec<Option<String>> {
-    let mut chain = Vec::new();
-    let parts: Vec<&str> = rel_path.split('/').collect();
-
-    for i in (1..parts.len()).rev() {
-        let scope = parts[..i].join("/");
-        chain.push(Some(scope));
-    }
-    chain.push(None);
-
-    chain
-}
-
-fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
 }

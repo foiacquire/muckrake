@@ -3,8 +3,7 @@ use std::env;
 use anyhow::Result;
 use clap::Parser;
 
-use muckrake::cli::{Cli, Commands, InboxCommands};
-use muckrake::context::Scope;
+use muckrake::cli::{Cli, Commands, InboxCommands, ToolCommands};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -12,15 +11,13 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let args: Vec<String> = env::args().collect();
-    let (scope, filtered_args) = extract_scope(&args);
-    let cli = Cli::parse_from(filtered_args);
+    let cli = Cli::parse();
     let cwd = env::current_dir()?;
 
-    dispatch(cli.command, &cwd, &scope)
+    dispatch(cli.command, &cwd)
 }
 
-fn dispatch(command: Commands, cwd: &std::path::Path, scope: &Scope) -> Result<()> {
+fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
     match command {
         Commands::Init {
             workspace,
@@ -32,16 +29,20 @@ fn dispatch(command: Commands, cwd: &std::path::Path, scope: &Scope) -> Result<(
         Commands::Ingest { paths, category } => {
             muckrake::cli::ingest::run(cwd, &paths, category.as_deref())
         }
-        Commands::List { tag } => muckrake::cli::list::run(cwd, scope, tag.as_deref()),
-        Commands::View { name } => muckrake::cli::view::run_view(cwd, &name),
-        Commands::Edit { name } => muckrake::cli::view::run_edit(cwd, &name),
-        Commands::Verify { name } => muckrake::cli::verify::run(cwd, name.as_deref()),
-        Commands::Categorize { name, category } => {
-            muckrake::cli::categorize::run(cwd, &name, &category)
-        }
-        Commands::Tag { name, tag } => muckrake::cli::tags::run_tag(cwd, &name, &tag),
-        Commands::Untag { name, tag } => muckrake::cli::tags::run_untag(cwd, &name, &tag),
-        Commands::Tags { name } => muckrake::cli::tags::run_tags(cwd, name.as_deref()),
+        Commands::List { references } => muckrake::cli::list::run(cwd, &references),
+        Commands::View { reference } => muckrake::cli::view::run_view(cwd, &reference),
+        Commands::Edit { reference } => muckrake::cli::view::run_edit(cwd, &reference),
+        Commands::Verify { reference } => muckrake::cli::verify::run(cwd, reference.as_deref()),
+        Commands::Categorize {
+            reference,
+            category,
+        } => muckrake::cli::categorize::run(cwd, &reference, &category),
+        Commands::Tag { reference, tag } => muckrake::cli::tags::run_tag(cwd, &reference, &tag),
+        Commands::Untag { reference, tag } => muckrake::cli::tags::run_untag(cwd, &reference, &tag),
+        Commands::Tags {
+            reference,
+            no_hash_check,
+        } => muckrake::cli::tags::run_tags(cwd, reference.as_deref(), no_hash_check),
         Commands::Inbox { command } => match command {
             Some(InboxCommands::Assign {
                 file,
@@ -51,6 +52,7 @@ fn dispatch(command: Commands, cwd: &std::path::Path, scope: &Scope) -> Result<(
             None => muckrake::cli::inbox::run_list(cwd),
         },
         Commands::Projects => muckrake::cli::projects::run(cwd),
+        Commands::Tool { command } => dispatch_tool(cwd, command),
     }
 }
 
@@ -75,32 +77,41 @@ fn dispatch_init(
     )
 }
 
-fn extract_scope(args: &[String]) -> (Scope, Vec<String>) {
-    let mut filtered = Vec::new();
-    let mut scope = Scope::Current;
-    let mut found_scope = false;
-    let mut found_command = false;
-
-    for (i, arg) in args.iter().enumerate() {
-        if i == 0 {
-            filtered.push(arg.clone());
-            continue;
+fn dispatch_tool(cwd: &std::path::Path, command: ToolCommands) -> Result<()> {
+    match command {
+        ToolCommands::Add {
+            name,
+            command,
+            scope,
+            file_type,
+            tag,
+            env,
+            verbose,
+        } => {
+            let params = muckrake::cli::tool::AddToolParams {
+                name: &name,
+                command: &command,
+                scope: scope.as_deref(),
+                file_type: &file_type,
+                tag: tag.as_deref(),
+                env: env.as_deref(),
+                verbose,
+            };
+            muckrake::cli::tool::run_add(cwd, &params)
         }
-
-        if !found_scope && !found_command && arg.starts_with(':') {
-            if let Ok(s) = Scope::parse(arg) {
-                scope = s;
-                found_scope = true;
-                continue;
-            }
-        }
-
-        if !arg.starts_with('-') {
-            found_command = true;
-        }
-
-        filtered.push(arg.clone());
+        ToolCommands::List => muckrake::cli::tool::run_list(cwd),
+        ToolCommands::Remove {
+            name,
+            scope,
+            file_type,
+            tag,
+        } => muckrake::cli::tool::run_remove(
+            cwd,
+            &name,
+            scope.as_deref(),
+            file_type.as_deref(),
+            tag.as_deref(),
+        ),
+        ToolCommands::Run(args) => muckrake::cli::tool::run(cwd, &args),
     }
-
-    (scope, filtered)
 }

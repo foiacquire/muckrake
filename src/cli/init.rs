@@ -3,13 +3,15 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 use crate::db::{ProjectDb, WorkspaceDb};
-use crate::models::{Category, ProtectionLevel};
+use crate::models::{Category, CategoryType, ProtectionLevel};
+use crate::reference::validate_name;
 
-const DEFAULT_CATEGORIES: &[(&str, &str, &str)] = &[
-    ("evidence/**", "immutable", "Evidence files"),
-    ("sources/**", "immutable", "Source materials"),
-    ("analysis/**", "protected", "Analysis documents"),
-    ("notes/**", "editable", "Working notes"),
+const DEFAULT_CATEGORIES: &[(&str, &str, &str, &str)] = &[
+    ("evidence/**", "files", "immutable", "Evidence files"),
+    ("sources/**", "files", "immutable", "Source materials"),
+    ("analysis/**", "files", "protected", "Analysis documents"),
+    ("notes/**", "files", "editable", "Working notes"),
+    ("tools/**", "tools", "editable", "Project tools"),
 ];
 
 pub fn run_init_project(
@@ -22,16 +24,25 @@ pub fn run_init_project(
         bail!("project already exists in {}", cwd.display());
     }
 
+    let project_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !project_name.is_empty() {
+        validate_name(&project_name)?;
+    }
+
     let project_db = ProjectDb::create(&db_path)?;
 
-    let categories = resolve_categories(cwd, no_categories, custom_categories)?;
-    for cat in &categories {
-        project_db.insert_category(cat)?;
+    let items = resolve_categories_with_policies(cwd, no_categories, custom_categories)?;
+    for (cat, level) in &items {
+        let cat_id = project_db.insert_category(cat)?;
+        project_db.insert_category_policy(cat_id, level)?;
     }
 
     register_in_workspace(cwd)?;
 
-    let cat_count = categories.len();
+    let cat_count = items.len();
     eprintln!("Initialized project in {}", cwd.display());
     if cat_count > 0 {
         eprintln!("  {cat_count} categories configured");
@@ -40,55 +51,73 @@ pub fn run_init_project(
     Ok(())
 }
 
-fn resolve_categories(
+fn resolve_categories_with_policies(
     cwd: &Path,
     no_categories: bool,
     custom_categories: &[String],
-) -> Result<Vec<Category>> {
+) -> Result<Vec<(Category, ProtectionLevel)>> {
     if !custom_categories.is_empty() {
-        return parse_custom_categories(custom_categories);
+        return parse_custom_with_policies(custom_categories);
     }
 
     if no_categories {
         return Ok(vec![]);
     }
 
-    if let Some(ws_cats) = load_workspace_defaults(cwd)? {
-        if !ws_cats.is_empty() {
-            return Ok(ws_cats);
+    if let Some(ws_items) = load_workspace_defaults(cwd)? {
+        if !ws_items.is_empty() {
+            return Ok(ws_items);
         }
     }
 
-    Ok(default_categories())
+    Ok(default_categories_with_policies())
 }
 
-fn parse_custom_categories(specs: &[String]) -> Result<Vec<Category>> {
+fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, ProtectionLevel)>> {
     specs
         .iter()
         .map(|s| {
-            let parts: Vec<&str> = s.splitn(2, ':').collect();
-            if parts.len() != 2 {
-                bail!("invalid category format '{s}', expected 'pattern:level'");
+            let parts: Vec<&str> = s.splitn(3, ':').collect();
+            match parts.len() {
+                2 => {
+                    let protection_level: ProtectionLevel = parts[1].parse()?;
+                    Ok((
+                        Category {
+                            id: None,
+                            pattern: parts[0].to_string(),
+                            category_type: CategoryType::Files,
+                            description: None,
+                        },
+                        protection_level,
+                    ))
+                }
+                3 => {
+                    let category_type: CategoryType = parts[1].parse()?;
+                    let protection_level: ProtectionLevel = parts[2].parse()?;
+                    Ok((
+                        Category {
+                            id: None,
+                            pattern: parts[0].to_string(),
+                            category_type,
+                            description: None,
+                        },
+                        protection_level,
+                    ))
+                }
+                _ => bail!("invalid category format '{s}', expected 'pattern:level' or 'pattern:type:level'"),
             }
-            let protection_level: ProtectionLevel = parts[1].parse()?;
-            Ok(Category {
-                id: None,
-                pattern: parts[0].to_string(),
-                protection_level,
-                description: None,
-            })
         })
         .collect()
 }
 
-fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<Category>>> {
+fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<(Category, ProtectionLevel)>>> {
     let mut dir = cwd.to_path_buf();
     loop {
         let mksp = dir.join(".mksp");
         if mksp.exists() {
             let ws_db = WorkspaceDb::open(&mksp)?;
-            let cats = ws_db.list_default_categories()?;
-            return Ok(Some(cats));
+            let items = ws_db.list_default_categories_with_policies()?;
+            return Ok(Some(items));
         }
         if !dir.pop() {
             break;
@@ -97,14 +126,19 @@ fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<Category>>> {
     Ok(None)
 }
 
-fn default_categories() -> Vec<Category> {
+fn default_categories_with_policies() -> Vec<(Category, ProtectionLevel)> {
     DEFAULT_CATEGORIES
         .iter()
-        .map(|(pattern, level, desc)| Category {
-            id: None,
-            pattern: (*pattern).to_string(),
-            protection_level: level.parse().unwrap(),
-            description: Some((*desc).to_string()),
+        .map(|(pattern, cat_type, level, desc)| {
+            (
+                Category {
+                    id: None,
+                    pattern: (*pattern).to_string(),
+                    category_type: cat_type.parse().unwrap(),
+                    description: Some((*desc).to_string()),
+                },
+                level.parse().unwrap(),
+            )
         })
         .collect()
 }
@@ -123,6 +157,7 @@ fn register_in_workspace(project_dir: &Path) -> Result<()> {
                 || "unnamed".to_string(),
                 |n| n.to_string_lossy().to_string(),
             );
+            validate_name(&name)?;
             ws_db.register_project(&name, &rel_path, None)?;
             eprintln!("  Registered in workspace at {}", d.display());
             return Ok(());
@@ -158,13 +193,15 @@ pub fn run_init_workspace(
     }
 
     if !no_categories {
-        for (pattern, level, desc) in DEFAULT_CATEGORIES {
-            ws_db.insert_default_category(&Category {
+        for (pattern, cat_type, level, desc) in DEFAULT_CATEGORIES {
+            let cat = Category {
                 id: None,
                 pattern: (*pattern).to_string(),
-                protection_level: level.parse().unwrap(),
+                category_type: cat_type.parse().unwrap(),
                 description: Some((*desc).to_string()),
-            })?;
+            };
+            let cat_id = ws_db.insert_default_category(&cat)?;
+            ws_db.insert_default_category_policy(cat_id, &level.parse().unwrap())?;
         }
     }
 

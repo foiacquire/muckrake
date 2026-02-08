@@ -6,6 +6,7 @@ pub mod list;
 pub mod projects;
 pub mod status;
 pub mod tags;
+pub mod tool;
 pub mod verify;
 pub mod view;
 
@@ -51,50 +52,52 @@ pub enum Commands {
     },
     /// List files in the current scope
     List {
-        /// Filter by tag
-        #[arg(long)]
-        tag: Option<String>,
+        /// References to list (defaults to current project)
+        references: Vec<String>,
     },
     /// Safely view a file (respects protection level)
     View {
-        /// File name
-        name: String,
+        /// File reference
+        reference: String,
     },
     /// Edit a file (refused for immutable categories)
     Edit {
-        /// File name
-        name: String,
+        /// File reference
+        reference: String,
     },
     /// Check integrity hashes
     Verify {
-        /// Specific file to verify (all files if omitted)
-        name: Option<String>,
+        /// File reference (all files in current project if omitted)
+        reference: Option<String>,
     },
     /// Move a file to a different category
     Categorize {
-        /// File name
-        name: String,
+        /// File reference
+        reference: String,
         /// Target category path
         category: String,
     },
     /// Add a tag to a file
     Tag {
-        /// File name
-        name: String,
+        /// File reference
+        reference: String,
         /// Tag to add
         tag: String,
     },
     /// Remove a tag from a file
     Untag {
-        /// File name
-        name: String,
+        /// File reference
+        reference: String,
         /// Tag to remove
         tag: String,
     },
     /// List tags (for a file, or all tags in scope)
     Tags {
-        /// Specific file name
-        name: Option<String>,
+        /// File reference
+        reference: Option<String>,
+        /// Skip hash verification (faster, but won't detect stale tags)
+        #[arg(long)]
+        no_hash_check: bool,
     },
     /// Workspace inbox operations
     Inbox {
@@ -103,6 +106,57 @@ pub enum Commands {
     },
     /// List all projects in the workspace
     Projects,
+    /// Run or manage project-local tools
+    #[command(alias = "t")]
+    Tool {
+        #[command(subcommand)]
+        command: ToolCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ToolCommands {
+    /// Register a tool in the database
+    Add {
+        /// Tool name (action name: ocr, transcribe, etc.)
+        name: String,
+        /// Command to execute
+        command: String,
+        /// Category scope (e.g., evidence, evidence/financial)
+        #[arg(long)]
+        scope: Option<String>,
+        /// File type filter (e.g., wav, pdf, image/*)
+        #[arg(long = "file-type", default_value = "*")]
+        file_type: String,
+        /// Tag to scope this config to (uses `tag_tool_config` instead)
+        #[arg(long)]
+        tag: Option<String>,
+        /// JSON env var overrides
+        #[arg(long)]
+        env: Option<String>,
+        /// Show command when running (default is quiet)
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// List registered tools
+    List,
+    /// Remove a tool configuration
+    Remove {
+        /// Tool name
+        name: String,
+        /// Category scope to match
+        #[arg(long)]
+        scope: Option<String>,
+        /// File type to match
+        #[arg(long = "file-type")]
+        file_type: Option<String>,
+        /// Tag to match (removes from `tag_tool_config`)
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Run a tool by name (default when no subcommand matches)
+    #[command(external_subcommand)]
+    Run(Vec<String>),
 }
 
 #[derive(Subcommand)]

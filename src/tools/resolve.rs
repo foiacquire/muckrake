@@ -8,6 +8,7 @@ pub struct ToolCandidate {
     pub label: String,
     pub command: String,
     pub env: Option<String>,
+    pub quiet: bool,
 }
 
 pub struct ToolLookup<'a> {
@@ -117,6 +118,7 @@ fn tool_config_to_candidate(row: &ToolConfigRow, label_prefix: &str) -> ToolCand
         label,
         command: row.command.clone(),
         env: row.env.clone(),
+        quiet: row.quiet,
     }
 }
 
@@ -125,6 +127,7 @@ fn tag_config_to_candidate(row: &TagToolConfigRow) -> ToolCandidate {
         label: row.tag.clone(),
         command: row.command.clone(),
         env: row.env.clone(),
+        quiet: row.quiet,
     }
 }
 
@@ -140,6 +143,19 @@ fn prompt_selection(candidates: &[ToolCandidate]) -> Result<Option<ToolCandidate
         Some(idx) => Ok(Some(candidates[idx].clone())),
         None => Ok(None),
     }
+}
+
+pub fn build_scope_chain(rel_path: &str) -> Vec<Option<String>> {
+    let mut chain = Vec::new();
+    let parts: Vec<&str> = rel_path.split('/').collect();
+
+    for i in (1..parts.len()).rev() {
+        let scope = parts[..i].join("/");
+        chain.push(Some(scope));
+    }
+    chain.push(None);
+
+    chain
 }
 
 pub fn default_tool(action: &str) -> String {

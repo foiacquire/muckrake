@@ -2,8 +2,15 @@ pub const PROJECT_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY,
     pattern TEXT NOT NULL UNIQUE,
-    protection_level TEXT NOT NULL,
+    category_type TEXT NOT NULL DEFAULT 'files',
     description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS category_policy (
+    id INTEGER PRIMARY KEY,
+    category_id INTEGER NOT NULL REFERENCES categories(id),
+    protection_level TEXT NOT NULL DEFAULT 'editable',
+    UNIQUE(category_id)
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -54,6 +61,7 @@ CREATE TABLE IF NOT EXISTS file_links (
 CREATE TABLE IF NOT EXISTS file_tags (
     file_id INTEGER REFERENCES files(id),
     tag TEXT NOT NULL,
+    file_hash TEXT,
     PRIMARY KEY (file_id, tag)
 );
 
@@ -63,7 +71,8 @@ CREATE TABLE IF NOT EXISTS tool_config (
     action TEXT NOT NULL,
     file_type TEXT NOT NULL,
     command TEXT NOT NULL,
-    env TEXT
+    env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS tag_tool_config (
@@ -73,6 +82,7 @@ CREATE TABLE IF NOT EXISTS tag_tool_config (
     file_type TEXT NOT NULL,
     command TEXT NOT NULL,
     env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1,
     UNIQUE(tag, action, file_type)
 );
 
@@ -103,8 +113,15 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS default_categories (
     id INTEGER PRIMARY KEY,
     pattern TEXT NOT NULL UNIQUE,
-    protection_level TEXT NOT NULL,
+    category_type TEXT NOT NULL DEFAULT 'files',
     description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS default_category_policy (
+    id INTEGER PRIMARY KEY,
+    default_category_id INTEGER NOT NULL REFERENCES default_categories(id),
+    protection_level TEXT NOT NULL DEFAULT 'editable',
+    UNIQUE(default_category_id)
 );
 
 CREATE TABLE IF NOT EXISTS tool_config (
@@ -113,7 +130,8 @@ CREATE TABLE IF NOT EXISTS tool_config (
     action TEXT NOT NULL,
     file_type TEXT NOT NULL,
     command TEXT NOT NULL,
-    env TEXT
+    env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS tag_tool_config (
@@ -123,6 +141,7 @@ CREATE TABLE IF NOT EXISTS tag_tool_config (
     file_type TEXT NOT NULL,
     command TEXT NOT NULL,
     env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1,
     UNIQUE(tag, action, file_type)
 );
 

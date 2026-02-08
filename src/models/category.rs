@@ -3,32 +3,33 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProtectionLevel {
-    Immutable,
-    Protected,
-    Editable,
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CategoryType {
+    #[default]
+    Files,
+    Tools,
+    Inbox,
 }
 
-impl fmt::Display for ProtectionLevel {
+impl fmt::Display for CategoryType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Immutable => write!(f, "immutable"),
-            Self::Protected => write!(f, "protected"),
-            Self::Editable => write!(f, "editable"),
+            Self::Files => write!(f, "files"),
+            Self::Tools => write!(f, "tools"),
+            Self::Inbox => write!(f, "inbox"),
         }
     }
 }
 
-impl FromStr for ProtectionLevel {
+impl FromStr for CategoryType {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "immutable" => Ok(Self::Immutable),
-            "protected" => Ok(Self::Protected),
-            "editable" => Ok(Self::Editable),
-            other => Err(anyhow::anyhow!("unknown protection level: {other}")),
+            "files" => Ok(Self::Files),
+            "tools" => Ok(Self::Tools),
+            "inbox" => Ok(Self::Inbox),
+            other => Err(anyhow::anyhow!("unknown category type: {other}")),
         }
     }
 }
@@ -37,7 +38,7 @@ impl FromStr for ProtectionLevel {
 pub struct Category {
     pub id: Option<i64>,
     pub pattern: String,
-    pub protection_level: ProtectionLevel,
+    pub category_type: CategoryType,
     pub description: Option<String>,
 }
 
@@ -54,21 +55,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protection_level_roundtrip() {
-        for level in &[
-            ProtectionLevel::Immutable,
-            ProtectionLevel::Protected,
-            ProtectionLevel::Editable,
+    fn category_type_roundtrip() {
+        for ct in &[
+            CategoryType::Files,
+            CategoryType::Tools,
+            CategoryType::Inbox,
         ] {
-            let s = level.to_string();
-            let parsed: ProtectionLevel = s.parse().unwrap();
-            assert_eq!(&parsed, level);
+            let s = ct.to_string();
+            let parsed: CategoryType = s.parse().unwrap();
+            assert_eq!(&parsed, ct);
         }
     }
 
     #[test]
-    fn protection_level_invalid() {
-        assert!("bogus".parse::<ProtectionLevel>().is_err());
+    fn category_type_invalid() {
+        assert!("bogus".parse::<CategoryType>().is_err());
+    }
+
+    #[test]
+    fn category_type_default() {
+        assert_eq!(CategoryType::default(), CategoryType::Files);
     }
 
     #[test]
@@ -76,7 +82,7 @@ mod tests {
         let cat = Category {
             id: None,
             pattern: "evidence/**".to_string(),
-            protection_level: ProtectionLevel::Immutable,
+            category_type: CategoryType::Files,
             description: None,
         };
         assert!(cat.matches("evidence/doc.pdf"));
@@ -89,7 +95,7 @@ mod tests {
         let cat = Category {
             id: None,
             pattern: "notes/**".to_string(),
-            protection_level: ProtectionLevel::Editable,
+            category_type: CategoryType::Files,
             description: None,
         };
         assert!(cat.matches("notes/daily.md"));

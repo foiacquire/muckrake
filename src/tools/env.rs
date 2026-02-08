@@ -69,6 +69,37 @@ fn print_privacy_notice(command_name: &str, privacy_removed: bool) {
     eprintln!("  Verify this tool does not leak identifying information.");
 }
 
+pub fn confirm_privacy_removal(command_name: &str, env_json: &str) -> anyhow::Result<()> {
+    let overrides: HashMap<String, serde_json::Value> =
+        serde_json::from_str(env_json).map_err(|e| anyhow::anyhow!("invalid env JSON: {e}"))?;
+
+    let removes_proxy = overrides
+        .iter()
+        .any(|(key, value)| is_proxy_var(key) && value.is_null());
+
+    if !removes_proxy {
+        return Ok(());
+    }
+
+    eprintln!(
+        "{} This configuration removes proxy environment variables for \"{}\".",
+        style("!").red().bold(),
+        command_name
+    );
+    eprintln!("  The tool will run WITHOUT Tor or any proxy, exposing your IP address.");
+    eprintln!();
+    eprint!("  Type \"I understand the risk\" to continue: ");
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    if input.trim() != "I understand the risk" {
+        anyhow::bail!("privacy removal not confirmed");
+    }
+
+    Ok(())
+}
+
 pub fn apply_env(cmd: &mut std::process::Command, env: &HashMap<String, Option<String>>) {
     for (key, value) in env {
         match value {

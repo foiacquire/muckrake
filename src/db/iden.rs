@@ -5,8 +5,16 @@ pub enum Categories {
     Table,
     Id,
     Pattern,
-    ProtectionLevel,
+    CategoryType,
     Description,
+}
+
+#[derive(Iden)]
+pub enum CategoryPolicy {
+    Table,
+    Id,
+    CategoryId,
+    ProtectionLevel,
 }
 
 #[derive(Iden)]
@@ -28,6 +36,7 @@ pub enum FileTags {
     Table,
     FileId,
     Tag,
+    FileHash,
 }
 
 #[derive(Iden)]
@@ -50,6 +59,7 @@ pub enum ToolConfig {
     FileType,
     Command,
     Env,
+    Quiet,
 }
 
 #[derive(Iden)]
@@ -61,6 +71,7 @@ pub enum TagToolConfig {
     FileType,
     Command,
     Env,
+    Quiet,
 }
 
 #[derive(Iden)]
@@ -85,8 +96,16 @@ pub enum DefaultCategories {
     Table,
     Id,
     Pattern,
-    ProtectionLevel,
+    CategoryType,
     Description,
+}
+
+#[derive(Iden)]
+pub enum DefaultCategoryPolicy {
+    Table,
+    Id,
+    DefaultCategoryId,
+    ProtectionLevel,
 }
 
 #[derive(Iden)]

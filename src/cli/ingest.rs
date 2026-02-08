@@ -7,6 +7,7 @@ use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::integrity;
 use crate::models::{ProtectionLevel, TrackedFile};
+use crate::util::whoami;
 
 pub fn run(cwd: &Path, paths: &[String], category: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
@@ -45,14 +46,9 @@ fn ingest_one(
     let size = std::fs::metadata(&dest)?.len();
     let mime_type = guess_mime(&file_name);
 
-    let matched_category = db.match_category(&rel_path)?;
-    let protection = matched_category
-        .as_ref()
-        .map(|c| &c.protection_level)
-        .cloned()
-        .unwrap_or(ProtectionLevel::Editable);
+    let protection = db.resolve_protection(&rel_path)?;
 
-    let is_immutable = try_set_immutable(&dest, &protection);
+    let is_immutable = try_set_immutable(&dest, protection);
 
     let provenance = serde_json::json!({
         "source": source.display().to_string(),
@@ -115,8 +111,8 @@ fn prepare_destination(
     Ok((rel_path, dest, file_name))
 }
 
-fn try_set_immutable(path: &Path, protection: &ProtectionLevel) -> bool {
-    if *protection != ProtectionLevel::Immutable {
+fn try_set_immutable(path: &Path, protection: ProtectionLevel) -> bool {
+    if protection != ProtectionLevel::Immutable {
         return false;
     }
     match integrity::set_immutable(path) {
@@ -152,10 +148,4 @@ fn guess_mime(filename: &str) -> Option<String> {
         _ => return None,
     };
     Some(mime.to_string())
-}
-
-fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
 }
