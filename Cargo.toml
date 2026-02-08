@@ -37,3 +37,6 @@ unsafe_code = "deny"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+cognitive_complexity = "warn"
+too_many_arguments = "warn"
+too_many_lines = "warn"

@@ -5,6 +5,7 @@ use console::style;
 
 use crate::context::{discover, Context};
 use crate::integrity::{self, VerifyResult};
+use crate::models::TrackedFile;
 
 pub fn run(cwd: &Path, name: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
@@ -26,70 +27,93 @@ pub fn run(cwd: &Path, name: Option<&str>) -> Result<()> {
         project_db.list_files(None)?
     };
 
-    let mut ok_count = 0u32;
-    let mut modified_count = 0u32;
-    let mut missing_count = 0u32;
-    let mut skipped_count = 0u32;
+    let counts = verify_files(&project_root, &files)?;
 
-    for file in &files {
+    eprintln!();
+    eprintln!(
+        "Verified: {} ok, {} modified, {} missing, {} skipped",
+        counts.ok, counts.modified, counts.missing, counts.skipped
+    );
+
+    let user = whoami();
+    project_db.insert_audit("verify", None, Some(&user), None)?;
+
+    if counts.modified > 0 || counts.missing > 0 {
+        bail!("integrity check failed");
+    }
+
+    Ok(())
+}
+
+struct VerifyCounts {
+    ok: u32,
+    modified: u32,
+    missing: u32,
+    skipped: u32,
+}
+
+fn verify_files(project_root: &Path, files: &[TrackedFile]) -> Result<VerifyCounts> {
+    let mut counts = VerifyCounts {
+        ok: 0,
+        modified: 0,
+        missing: 0,
+        skipped: 0,
+    };
+
+    for file in files {
         let Some(ref expected_hash) = file.sha256 else {
-            skipped_count += 1;
+            counts.skipped += 1;
             continue;
         };
 
         let file_path = project_root.join(&file.path);
         let result = integrity::verify_file(&file_path, expected_hash)?;
 
+        print_verify_result(&result, &file.path);
         match result {
-            VerifyResult::Ok => {
-                ok_count += 1;
-                eprintln!("  {} {}", style("✓").green(), file.path);
-            }
-            VerifyResult::Modified { expected, actual } => {
-                modified_count += 1;
-                eprintln!(
-                    "  {} {} MODIFIED",
-                    style("✗").red().bold(),
-                    style(&file.path).red()
-                );
-                eprintln!("    expected: {}", style(&expected).dim());
-                eprintln!("    actual:   {}", style(&actual).dim());
-            }
-            VerifyResult::Missing => {
-                missing_count += 1;
-                eprintln!(
-                    "  {} {} MISSING",
-                    style("?").yellow(),
-                    style(&file.path).yellow()
-                );
-            }
+            VerifyResult::Ok => counts.ok += 1,
+            VerifyResult::Modified { .. } => counts.modified += 1,
+            VerifyResult::Missing => counts.missing += 1,
         }
 
-        if file.immutable {
-            let actually_immutable = integrity::is_immutable(&file_path).unwrap_or(false);
-            if !actually_immutable && file_path.exists() {
-                eprintln!(
-                    "  {} {} immutable flag removed",
-                    style("!").yellow(),
-                    file.path
-                );
-            }
+        check_immutable_flag(file, &file_path);
+    }
+
+    Ok(counts)
+}
+
+fn print_verify_result(result: &VerifyResult, path: &str) {
+    match result {
+        VerifyResult::Ok => {
+            eprintln!("  {} {path}", style("✓").green());
+        }
+        VerifyResult::Modified { expected, actual } => {
+            eprintln!(
+                "  {} {} MODIFIED",
+                style("✗").red().bold(),
+                style(path).red()
+            );
+            eprintln!("    expected: {}", style(expected).dim());
+            eprintln!("    actual:   {}", style(actual).dim());
+        }
+        VerifyResult::Missing => {
+            eprintln!("  {} {} MISSING", style("?").yellow(), style(path).yellow());
         }
     }
+}
 
-    eprintln!();
-    eprintln!(
-        "Verified: {ok_count} ok, {modified_count} modified, {missing_count} missing, {skipped_count} skipped"
-    );
-
-    let user = whoami();
-    project_db.insert_audit("verify", None, Some(&user), None)?;
-
-    if modified_count > 0 || missing_count > 0 {
-        bail!("integrity check failed");
+fn check_immutable_flag(file: &TrackedFile, file_path: &Path) {
+    if !file.immutable {
+        return;
     }
-
-    Ok(())
+    let actually_immutable = integrity::is_immutable(file_path).unwrap_or(false);
+    if !actually_immutable && file_path.exists() {
+        eprintln!(
+            "  {} {} immutable flag removed",
+            style("!").yellow(),
+            file.path
+        );
+    }
 }
 
 fn whoami() -> String {

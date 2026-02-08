@@ -38,51 +38,12 @@ fn run_open(cwd: &Path, name: &str, action: &str) -> Result<()> {
         bail!("file missing from disk: {}", file.path);
     }
 
-    let matched_cat = project_db.match_category(&file.path)?;
-    let protection = matched_cat
-        .as_ref()
-        .map(|c| &c.protection_level)
-        .cloned()
-        .unwrap_or(ProtectionLevel::Editable);
+    let protection = check_edit_permission(&project_db, &file.path, name, action)?;
 
-    if action == "edit" && protection == ProtectionLevel::Immutable {
-        bail!("cannot edit immutable file '{name}'");
-    }
-
-    if action == "edit" && protection == ProtectionLevel::Protected {
-        eprintln!("Warning: editing protected file '{name}'");
-    }
-
-    let file_ext = file.name.rsplit('.').next().unwrap_or("*");
-
-    let tags = file
-        .id
-        .map(|id| project_db.get_tags(id))
-        .transpose()?
-        .unwrap_or_default();
-
-    let scope_chain = build_scope_chain(&file.path);
-    let scope_refs: Vec<Option<&str>> = scope_chain.iter().map(|s| s.as_deref()).collect();
-
-    let tool = tools::resolve_tool(
-        action,
-        file_ext,
-        &scope_refs,
-        &tags,
-        &project_db,
-        workspace_db.as_ref(),
-    )?;
-
-    let command_str = match &tool {
-        Some(t) => t.command.clone(),
-        None => tools::default_tool(action),
-    };
-
-    let env_json = tool.as_ref().and_then(|t| t.env.as_deref());
-    let env_map = tools::build_tool_env(env_json, &command_str);
-
+    let command_str = resolve_open_tool(&file, action, &project_db, workspace_db.as_ref())?;
     let target_path = resolve_open_path(&file_path, action, &protection)?;
 
+    let env_map = tools::build_tool_env(None, &command_str);
     let mut cmd = Command::new(&command_str);
     cmd.arg(&target_path);
     tools::apply_env(&mut cmd, &env_map);
@@ -94,14 +55,66 @@ fn run_open(cwd: &Path, name: &str, action: &str) -> Result<()> {
     }
 
     let user = whoami();
-    let file_id = file.id;
-    project_db.insert_audit(action, file_id, Some(&user), None)?;
+    project_db.insert_audit(action, file.id, Some(&user), None)?;
 
     if !status.success() {
         bail!("tool '{command_str}' exited with {status}");
     }
 
     Ok(())
+}
+
+fn check_edit_permission(
+    db: &crate::db::ProjectDb,
+    rel_path: &str,
+    name: &str,
+    action: &str,
+) -> Result<ProtectionLevel> {
+    let matched_cat = db.match_category(rel_path)?;
+    let protection = matched_cat
+        .as_ref()
+        .map(|c| &c.protection_level)
+        .cloned()
+        .unwrap_or(ProtectionLevel::Editable);
+
+    if action == "edit" && protection == ProtectionLevel::Immutable {
+        bail!("cannot edit immutable file '{name}'");
+    }
+    if action == "edit" && protection == ProtectionLevel::Protected {
+        eprintln!("Warning: editing protected file '{name}'");
+    }
+
+    Ok(protection)
+}
+
+fn resolve_open_tool(
+    file: &crate::models::TrackedFile,
+    action: &str,
+    project_db: &crate::db::ProjectDb,
+    workspace_db: Option<&crate::db::WorkspaceDb>,
+) -> Result<String> {
+    let file_ext = file.name.rsplit('.').next().unwrap_or("*");
+    let tags = file
+        .id
+        .map(|id| project_db.get_tags(id))
+        .transpose()?
+        .unwrap_or_default();
+
+    let scope_chain = build_scope_chain(&file.path);
+    let scope_refs: Vec<Option<&str>> = scope_chain.iter().map(|s| s.as_deref()).collect();
+
+    let lookup = tools::ToolLookup {
+        action,
+        file_type: file_ext,
+        scope_chain: &scope_refs,
+        tags: &tags,
+    };
+    let tool = tools::resolve_tool(&lookup, project_db, workspace_db)?;
+
+    Ok(match &tool {
+        Some(t) => t.command.clone(),
+        None => tools::default_tool(action),
+    })
 }
 
 fn resolve_open_path(

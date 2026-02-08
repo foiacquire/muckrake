@@ -39,30 +39,7 @@ fn ingest_one(
         bail!("not a regular file: {}", source.display());
     }
 
-    let file_name = source.file_name().map_or_else(
-        || "unnamed".to_string(),
-        |n| n.to_string_lossy().to_string(),
-    );
-
-    let rel_path = match category {
-        Some(cat) => format!("{cat}/{file_name}"),
-        None => file_name.clone(),
-    };
-
-    let dest = project_root.join(&rel_path);
-
-    if dest.exists() {
-        bail!("destination already exists: {}", dest.display());
-    }
-
-    if db.get_file_by_name(&file_name)?.is_some() {
-        bail!("file '{file_name}' already registered in project");
-    }
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::copy(source, &dest)?;
+    let (rel_path, dest, file_name) = prepare_destination(project_root, db, source, category)?;
 
     let hash = integrity::hash_file(&dest)?;
     let size = std::fs::metadata(&dest)?.len();
@@ -75,15 +52,7 @@ fn ingest_one(
         .cloned()
         .unwrap_or(ProtectionLevel::Editable);
 
-    let mut is_immutable = false;
-    if protection == ProtectionLevel::Immutable {
-        match integrity::set_immutable(&dest) {
-            Ok(()) => is_immutable = true,
-            Err(e) => {
-                eprintln!("  warning: could not set immutable flag: {e}");
-            }
-        }
-    }
+    let is_immutable = try_set_immutable(&dest, &protection);
 
     let provenance = serde_json::json!({
         "source": source.display().to_string(),
@@ -111,6 +80,52 @@ fn ingest_one(
     eprintln!("  Protection: {protection}");
 
     Ok(())
+}
+
+fn prepare_destination(
+    project_root: &Path,
+    db: &ProjectDb,
+    source: &Path,
+    category: Option<&str>,
+) -> Result<(String, std::path::PathBuf, String)> {
+    let file_name = source.file_name().map_or_else(
+        || "unnamed".to_string(),
+        |n| n.to_string_lossy().to_string(),
+    );
+
+    let rel_path = match category {
+        Some(cat) => format!("{cat}/{file_name}"),
+        None => file_name.clone(),
+    };
+
+    let dest = project_root.join(&rel_path);
+
+    if dest.exists() {
+        bail!("destination already exists: {}", dest.display());
+    }
+    if db.get_file_by_name(&file_name)?.is_some() {
+        bail!("file '{file_name}' already registered in project");
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(source, &dest)?;
+
+    Ok((rel_path, dest, file_name))
+}
+
+fn try_set_immutable(path: &Path, protection: &ProtectionLevel) -> bool {
+    if *protection != ProtectionLevel::Immutable {
+        return false;
+    }
+    match integrity::set_immutable(path) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("  warning: could not set immutable flag: {e}");
+            false
+        }
+    }
 }
 
 fn guess_mime(filename: &str) -> Option<String> {

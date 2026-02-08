@@ -10,23 +10,38 @@ pub struct ToolCandidate {
     pub env: Option<String>,
 }
 
+pub struct ToolLookup<'a> {
+    pub action: &'a str,
+    pub file_type: &'a str,
+    pub scope_chain: &'a [Option<&'a str>],
+    pub tags: &'a [String],
+}
+
 pub fn resolve_tool(
-    action: &str,
-    file_type: &str,
-    scope_chain: &[Option<&str>],
-    tags: &[String],
+    lookup: &ToolLookup,
     project_db: &ProjectDb,
     workspace_db: Option<&WorkspaceDb>,
 ) -> Result<Option<ToolCandidate>> {
     let mut candidates = Vec::new();
 
-    let category_candidate =
-        resolve_category_candidate(action, file_type, scope_chain, project_db, workspace_db)?;
+    let category_candidate = resolve_category_candidate(
+        lookup.action,
+        lookup.file_type,
+        lookup.scope_chain,
+        project_db,
+        workspace_db,
+    )?;
     if let Some(c) = category_candidate {
         candidates.push(c);
     }
 
-    let tag_candidates = resolve_tag_candidates(action, file_type, tags, project_db, workspace_db)?;
+    let tag_candidates = resolve_tag_candidates(
+        lookup.action,
+        lookup.file_type,
+        lookup.tags,
+        project_db,
+        workspace_db,
+    )?;
     candidates.extend(tag_candidates);
 
     match candidates.len() {
