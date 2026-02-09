@@ -23,6 +23,9 @@ pub fn run_init_project(
     if db_path.exists() {
         bail!("project already exists in {}", cwd.display());
     }
+    if cwd.join(".mksp").exists() {
+        bail!("workspace already exists in {}", cwd.display());
+    }
 
     let project_name = cwd
         .file_name()
@@ -176,6 +179,9 @@ pub fn run_init_workspace(
     let db_path = cwd.join(".mksp");
     if db_path.exists() {
         bail!("workspace already exists in {}", cwd.display());
+    }
+    if cwd.join(".mkrk").exists() {
+        bail!("project already exists in {}", cwd.display());
     }
 
     validate_projects_dir(projects_dir)?;
