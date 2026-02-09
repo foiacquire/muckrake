@@ -370,6 +370,59 @@ mod tests {
         db
     }
 
+    fn make_project_ctx(dir: &std::path::Path) -> Context {
+        Context::Project {
+            project_root: dir.to_path_buf(),
+            project_db: ProjectDb::open(&dir.join(".mkrk")).unwrap(),
+            workspace: None,
+        }
+    }
+
+    fn resolve_one(reference: &str, ctx: &Context) -> ResolvedCollection {
+        let refs = vec![parse_reference(reference).unwrap()];
+        resolve_references(&refs, ctx).unwrap()
+    }
+
+    struct WorkspaceSetup {
+        ws_dir: TempDir,
+        ws_db: WorkspaceDb,
+    }
+
+    fn setup_workspace() -> WorkspaceSetup {
+        let ws_dir = TempDir::new().unwrap();
+        let ws_db = WorkspaceDb::create(&ws_dir.path().join(".mksp")).unwrap();
+        ws_db.set_config("projects_dir", "projects").unwrap();
+        WorkspaceSetup { ws_dir, ws_db }
+    }
+
+    fn add_workspace_project(ws: &WorkspaceSetup, name: &str) -> (std::path::PathBuf, ProjectDb) {
+        let proj_dir = ws.ws_dir.path().join("projects").join(name);
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        let db = ProjectDb::create(&proj_dir.join(".mkrk")).unwrap();
+        db.insert_category(&crate::models::Category {
+            id: None,
+            pattern: "evidence/**".to_string(),
+            category_type: crate::models::CategoryType::Files,
+            description: None,
+        })
+        .unwrap();
+        ws.ws_db
+            .register_project(name, &format!("projects/{name}"), None)
+            .unwrap();
+        (proj_dir, db)
+    }
+
+    fn make_ws_project_ctx(ws: &WorkspaceSetup, proj_dir: &std::path::Path) -> Context {
+        Context::Project {
+            project_root: proj_dir.to_path_buf(),
+            project_db: ProjectDb::open(&proj_dir.join(".mkrk")).unwrap(),
+            workspace: Some(WorkspaceContext {
+                workspace_root: ws.ws_dir.path().to_path_buf(),
+                workspace_db: WorkspaceDb::open(&ws.ws_dir.path().join(".mksp")).unwrap(),
+            }),
+        }
+    }
+
     #[test]
     fn resolve_bare_path_by_path() {
         let dir = TempDir::new().unwrap();
@@ -377,14 +430,8 @@ mod tests {
         db.insert_file(&make_file("report.pdf", "evidence/report.pdf"))
             .unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference("evidence/report.pdf").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one("evidence/report.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "report.pdf");
     }
@@ -396,14 +443,8 @@ mod tests {
         db.insert_file(&make_file("report.pdf", "evidence/report.pdf"))
             .unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference("report.pdf").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one("report.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.path, "evidence/report.pdf");
     }
@@ -417,14 +458,8 @@ mod tests {
         db.insert_file(&make_file("todo.md", "notes/todo.md"))
             .unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference(":evidence").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one(":evidence", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "report.pdf");
     }
@@ -440,14 +475,8 @@ mod tests {
             .unwrap();
         db.insert_tag(id1, "classified", "testhash").unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference(":evidence!classified").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one(":evidence!classified", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "report.pdf");
     }
@@ -470,21 +499,15 @@ mod tests {
         db.insert_tag(id2, "classified", "testhash").unwrap();
         db.insert_tag(id3, "priority", "testhash").unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
+        let ctx = make_project_ctx(dir.path());
 
         // classified AND priority -> only a.pdf
-        let refs = vec![parse_reference(":evidence!classified!priority").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let coll = resolve_one(":evidence!classified!priority", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "a.pdf");
 
         // classified OR priority -> a.pdf, b.pdf, c.pdf
-        let refs = vec![parse_reference(":evidence!classified,priority").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let coll = resolve_one(":evidence!classified,priority", &ctx);
         assert_eq!(coll.files.len(), 3);
     }
 
@@ -497,67 +520,24 @@ mod tests {
         db.insert_file(&make_file("photo.jpg", "evidence/photo.jpg"))
             .unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference(":evidence/*.pdf").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one(":evidence/*.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "report.pdf");
     }
 
     #[test]
     fn resolve_cross_project() {
-        let ws_dir = TempDir::new().unwrap();
-        let ws_db = WorkspaceDb::create(&ws_dir.path().join(".mksp")).unwrap();
-        ws_db.set_config("projects_dir", "projects").unwrap();
-
-        let proj1_dir = ws_dir.path().join("projects").join("bailey");
-        std::fs::create_dir_all(&proj1_dir).unwrap();
-        let db1 = ProjectDb::create(&proj1_dir.join(".mkrk")).unwrap();
-        db1.insert_category(&crate::models::Category {
-            id: None,
-            pattern: "evidence/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        let ws = setup_workspace();
+        let (proj1_dir, db1) = add_workspace_project(&ws, "bailey");
         db1.insert_file(&make_file("b-report.pdf", "evidence/b-report.pdf"))
             .unwrap();
-        ws_db
-            .register_project("bailey", "projects/bailey", None)
-            .unwrap();
-
-        let proj2_dir = ws_dir.path().join("projects").join("george");
-        std::fs::create_dir_all(&proj2_dir).unwrap();
-        let db2 = ProjectDb::create(&proj2_dir.join(".mkrk")).unwrap();
-        db2.insert_category(&crate::models::Category {
-            id: None,
-            pattern: "evidence/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        let (_, db2) = add_workspace_project(&ws, "george");
         db2.insert_file(&make_file("g-report.pdf", "evidence/g-report.pdf"))
             .unwrap();
-        ws_db
-            .register_project("george", "projects/george", None)
-            .unwrap();
 
-        let ctx = Context::Project {
-            project_root: proj1_dir.clone(),
-            project_db: ProjectDb::open(&proj1_dir.join(".mkrk")).unwrap(),
-            workspace: Some(WorkspaceContext {
-                workspace_root: ws_dir.path().to_path_buf(),
-                workspace_db: WorkspaceDb::open(&ws_dir.path().join(".mksp")).unwrap(),
-            }),
-        };
-
-        let refs = vec![parse_reference(":{bailey,george}.evidence").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_ws_project_ctx(&ws, &proj1_dir);
+        let coll = resolve_one(":{bailey,george}.evidence", &ctx);
         assert_eq!(coll.files.len(), 2);
 
         let names: Vec<&str> = coll.files.iter().map(|f| f.file.name.as_str()).collect();
@@ -570,14 +550,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         setup_project(dir.path());
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference(":evidence").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one(":evidence", &ctx);
         assert!(coll.files.is_empty());
     }
 
@@ -590,53 +564,23 @@ mod tests {
         db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg"))
             .unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
-        let refs = vec![parse_reference(":evidence.emails").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let ctx = make_project_ctx(dir.path());
+        let coll = resolve_one(":evidence.emails", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "email1.eml");
     }
 
     #[test]
     fn resolve_subcategory_not_category() {
-        let ws_dir = TempDir::new().unwrap();
-        let ws_db = WorkspaceDb::create(&ws_dir.path().join(".mksp")).unwrap();
-        ws_db.set_config("projects_dir", "projects").unwrap();
-
-        let proj_dir = ws_dir.path().join("projects").join("bailey");
-        std::fs::create_dir_all(&proj_dir).unwrap();
-        let db = ProjectDb::create(&proj_dir.join(".mkrk")).unwrap();
-        db.insert_category(&crate::models::Category {
-            id: None,
-            pattern: "evidence/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        let ws = setup_workspace();
+        let (proj_dir, db) = add_workspace_project(&ws, "bailey");
         db.insert_file(&make_file("doc.pdf", "evidence/doc.pdf"))
-            .unwrap();
-        ws_db
-            .register_project("bailey", "projects/bailey", None)
             .unwrap();
 
         // Inside a project where "bailey" is NOT a category
-        let ctx = Context::Project {
-            project_root: proj_dir.clone(),
-            project_db: ProjectDb::open(&proj_dir.join(".mkrk")).unwrap(),
-            workspace: Some(WorkspaceContext {
-                workspace_root: ws_dir.path().to_path_buf(),
-                workspace_db: WorkspaceDb::open(&ws_dir.path().join(".mksp")).unwrap(),
-            }),
-        };
-
+        let ctx = make_ws_project_ctx(&ws, &proj_dir);
         // :bailey.evidence → falls back to project.category
-        let refs = vec![parse_reference(":bailey.evidence").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let coll = resolve_one(":bailey.evidence", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "doc.pdf");
         assert_eq!(coll.files[0].project_name.as_deref(), Some("bailey"));
@@ -644,36 +588,20 @@ mod tests {
 
     #[test]
     fn resolve_three_levels() {
-        let ws_dir = TempDir::new().unwrap();
-        let ws_db = WorkspaceDb::create(&ws_dir.path().join(".mksp")).unwrap();
-        ws_db.set_config("projects_dir", "projects").unwrap();
-
-        let proj_dir = ws_dir.path().join("projects").join("bailey");
-        std::fs::create_dir_all(&proj_dir).unwrap();
-        let db = ProjectDb::create(&proj_dir.join(".mkrk")).unwrap();
-        db.insert_category(&crate::models::Category {
-            id: None,
-            pattern: "evidence/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        let ws = setup_workspace();
+        let (_, db) = add_workspace_project(&ws, "bailey");
         db.insert_file(&make_file("email.eml", "evidence/emails/email.eml"))
             .unwrap();
         db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg"))
             .unwrap();
-        ws_db
-            .register_project("bailey", "projects/bailey", None)
-            .unwrap();
 
         let ctx = Context::Workspace {
-            workspace_root: ws_dir.path().to_path_buf(),
-            workspace_db: WorkspaceDb::open(&ws_dir.path().join(".mksp")).unwrap(),
+            workspace_root: ws.ws_dir.path().to_path_buf(),
+            workspace_db: WorkspaceDb::open(&ws.ws_dir.path().join(".mksp")).unwrap(),
         };
 
         // :bailey.evidence.emails → project.category.subcategory
-        let refs = vec![parse_reference(":bailey.evidence.emails").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let coll = resolve_one(":bailey.evidence.emails", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "email.eml");
     }
@@ -689,15 +617,9 @@ mod tests {
         db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg"))
             .unwrap();
 
-        let ctx = Context::Project {
-            project_root: dir.path().to_path_buf(),
-            project_db: ProjectDb::open(&dir.path().join(".mkrk")).unwrap(),
-            workspace: None,
-        };
-
+        let ctx = make_project_ctx(dir.path());
         // :{evidence,notes}.drafts → evidence/drafts/ and notes/drafts/
-        let refs = vec![parse_reference(":{evidence,notes}.drafts").unwrap()];
-        let coll = resolve_references(&refs, &ctx).unwrap();
+        let coll = resolve_one(":{evidence,notes}.drafts", &ctx);
         assert_eq!(coll.files.len(), 1);
         assert_eq!(coll.files[0].file.name, "memo.md");
     }

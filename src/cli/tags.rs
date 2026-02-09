@@ -1,29 +1,27 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use console::style;
 
 use crate::context::{discover, Context};
 use crate::integrity;
+use crate::models::TrackedFile;
 use crate::reference::{parse_reference, resolve_references};
 
-pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
-    let ctx = discover(cwd)?;
-    let Context::Project {
-        project_db,
-        project_root,
-        ..
-    } = &ctx
-    else {
-        bail!("must be inside a project to tag files");
-    };
-
+fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(TrackedFile, i64)> {
     let parsed = parse_reference(reference)?;
-    let collection = resolve_references(&[parsed], &ctx)?;
+    let collection = resolve_references(&[parsed], ctx)?;
     let resolved = collection.expect_one(reference)?;
     let file = resolved.file;
     let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    Ok((file, file_id))
+}
+
+pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
+    let ctx = discover(cwd)?;
+    let (project_root, project_db) = ctx.require_project()?;
+    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let abs_path = project_root.join(&file.path);
     let hash = integrity::hash_file(&abs_path)?;
@@ -41,15 +39,8 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
 
 pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ctx = discover(cwd)?;
-    let Context::Project { project_db, .. } = &ctx else {
-        bail!("must be inside a project to untag files");
-    };
-
-    let parsed = parse_reference(reference)?;
-    let collection = resolve_references(&[parsed], &ctx)?;
-    let resolved = collection.expect_one(reference)?;
-    let file = resolved.file;
-    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    let (_, project_db) = ctx.require_project()?;
+    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     project_db.remove_tag(file_id, tag)?;
     eprintln!("Removed tag '{tag}' from '{}'", file.name);
@@ -59,14 +50,7 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
 
 pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Result<()> {
     let ctx = discover(cwd)?;
-    let Context::Project {
-        project_db,
-        project_root,
-        ..
-    } = &ctx
-    else {
-        bail!("must be inside a project to list tags");
-    };
+    let (project_root, project_db) = ctx.require_project()?;
 
     if no_hash_check {
         eprintln!(
@@ -76,11 +60,7 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
     }
 
     if let Some(r) = reference {
-        let parsed = parse_reference(r)?;
-        let collection = resolve_references(&[parsed], &ctx)?;
-        let resolved = collection.expect_one(r)?;
-        let file = resolved.file;
-        let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+        let (file, file_id) = resolve_file_ref(r, &ctx)?;
         let tags = project_db.get_tags(file_id)?;
         if tags.is_empty() {
             eprintln!("No tags on '{}'", file.name);

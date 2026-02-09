@@ -22,6 +22,35 @@ pub struct WorkspaceContext {
     pub workspace_db: WorkspaceDb,
 }
 
+impl Context {
+    pub fn require_project(&self) -> Result<(&Path, &ProjectDb)> {
+        match self {
+            Self::Project {
+                project_root,
+                project_db,
+                ..
+            } => Ok((project_root, project_db)),
+            _ => anyhow::bail!("must be inside a project"),
+        }
+    }
+
+    pub fn require_project_with_workspace(
+        &self,
+    ) -> Result<(&Path, &ProjectDb, Option<&WorkspaceDb>)> {
+        match self {
+            Self::Project {
+                project_root,
+                project_db,
+                workspace,
+            } => {
+                let ws = workspace.as_ref().map(|w| &w.workspace_db);
+                Ok((project_root, project_db, ws))
+            }
+            _ => anyhow::bail!("must be inside a project"),
+        }
+    }
+}
+
 pub fn discover(cwd: &Path) -> Result<Context> {
     let mut project_root: Option<PathBuf> = None;
     let mut workspace_root: Option<PathBuf> = None;

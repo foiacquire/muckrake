@@ -7,7 +7,7 @@ const CROSS_DEVICE_ERROR: i32 = 18; // EXDEV
 #[cfg(windows)]
 const CROSS_DEVICE_ERROR: i32 = 17; // ERROR_NOT_SAME_DEVICE
 
-use crate::context::{discover, Context};
+use crate::context::discover;
 use crate::integrity;
 use crate::models::ProtectionLevel;
 use crate::reference::{parse_reference, resolve_references};
@@ -15,14 +15,7 @@ use crate::util::whoami;
 
 pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
     let ctx = discover(cwd)?;
-    let Context::Project {
-        project_root,
-        project_db,
-        ..
-    } = &ctx
-    else {
-        bail!("must be inside a project to categorize files");
-    };
+    let (project_root, project_db) = ctx.require_project()?;
 
     let parsed = parse_reference(reference)?;
     let collection = resolve_references(&[parsed], &ctx)?;

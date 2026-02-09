@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{bail, Result};
 
-use crate::context::{discover, Context};
+use crate::context::discover;
 use crate::models::ProtectionLevel;
 use crate::reference::{parse_reference, resolve_references};
 use crate::tools;
@@ -19,17 +19,7 @@ pub fn run_edit(cwd: &Path, reference: &str) -> Result<()> {
 
 fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (project_root, project_db, workspace_db) = match &ctx {
-        Context::Project {
-            project_root,
-            project_db,
-            workspace,
-        } => {
-            let ws = workspace.as_ref().map(|w| &w.workspace_db);
-            (project_root.clone(), project_db, ws)
-        }
-        _ => bail!("must be inside a project to {action} files"),
-    };
+    let (project_root, project_db, workspace_db) = ctx.require_project_with_workspace()?;
 
     let parsed = parse_reference(reference)?;
     let collection = resolve_references(&[parsed], &ctx)?;

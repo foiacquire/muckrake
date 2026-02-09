@@ -6,6 +6,7 @@ use console::style;
 use crate::context::discover;
 use crate::models::TrackedFile;
 use crate::reference::{parse_reference, resolve_references, Reference};
+use crate::util::format_size;
 
 pub fn run(cwd: &Path, raw_refs: &[String]) -> Result<()> {
     let ctx = discover(cwd)?;
@@ -77,20 +78,4 @@ fn print_file(f: &TrackedFile) {
         protection,
         style(size).dim()
     );
-}
-
-fn format_size(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = KB * 1024;
-    const GB: i64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1}G", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes}B")
-    }
 }

@@ -26,7 +26,7 @@ impl ProjectDb {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to create project db at {}", path.display()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(PROJECT_SCHEMA)?;
+        conn.execute_batch(&PROJECT_SCHEMA)?;
         migrate(&conn)?;
         Ok(Self { conn })
     }

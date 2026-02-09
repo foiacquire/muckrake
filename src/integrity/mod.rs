@@ -28,29 +28,27 @@ pub fn hash_file(path: &Path) -> Result<String> {
 }
 
 pub fn set_immutable(path: &Path) -> Result<()> {
-    let output = Command::new("chattr")
-        .arg("+i")
-        .arg(path)
-        .output()
-        .with_context(|| format!("failed to run chattr +i on {}", path.display()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("chattr +i failed on {}: {}", path.display(), stderr.trim());
-    }
-    Ok(())
+    run_chattr("+i", path)
 }
 
 pub fn clear_immutable(path: &Path) -> Result<()> {
+    run_chattr("-i", path)
+}
+
+fn run_chattr(flag: &str, path: &Path) -> Result<()> {
     let output = Command::new("chattr")
-        .arg("-i")
+        .arg(flag)
         .arg(path)
         .output()
-        .with_context(|| format!("failed to run chattr -i on {}", path.display()))?;
+        .with_context(|| format!("failed to run chattr {flag} on {}", path.display()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("chattr -i failed on {}: {}", path.display(), stderr.trim());
+        anyhow::bail!(
+            "chattr {flag} failed on {}: {}",
+            path.display(),
+            stderr.trim()
+        );
     }
     Ok(())
 }

@@ -19,26 +19,16 @@ pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
     let raw_refs = &args[1..];
 
     let ctx = discover(cwd)?;
-    let (project_root, project_db, workspace_db) = match &ctx {
-        Context::Project {
-            project_root,
-            project_db,
-            workspace,
-        } => {
-            let ws = workspace.as_ref().map(|w| &w.workspace_db);
-            (project_root.clone(), project_db, ws)
-        }
-        _ => bail!("must be inside a project to run tools"),
-    };
+    let (project_root, project_db, workspace_db) = ctx.require_project_with_workspace()?;
 
-    let (file_paths, resolved_files) = resolve_file_refs(raw_refs, &project_root, &ctx)?;
+    let (file_paths, resolved_files) = resolve_file_refs(raw_refs, project_root, &ctx)?;
 
     let candidate = resolve_db_tool(tool_name, &resolved_files, project_db, workspace_db)?;
 
     let (command_str, env_json, quiet) = if let Some(c) = candidate {
         (c.command, c.env, c.quiet)
     } else {
-        let tool_path = discover_tool(&project_root, tool_name)?;
+        let tool_path = discover_tool(project_root, tool_name)?;
         (tool_path.to_string_lossy().to_string(), None, true)
     };
 
@@ -48,7 +38,7 @@ pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
         eprintln!("{} {}", style(">").dim(), command_str);
     }
 
-    let status = build_and_run_command(&command_str, &file_paths, &env_map, &project_root, &ctx)?;
+    let status = build_and_run_command(&command_str, &file_paths, &env_map, project_root, &ctx)?;
 
     let user = whoami();
     let detail = serde_json::json!({
@@ -191,9 +181,7 @@ pub fn run_add(cwd: &Path, params: &AddToolParams<'_>) -> Result<()> {
         verbose,
     } = params;
     let ctx = discover(cwd)?;
-    let Context::Project { project_db, .. } = &ctx else {
-        bail!("must be inside a project to register tools");
-    };
+    let (_, project_db) = ctx.require_project()?;
 
     if let Some(env_json) = *env {
         tools::confirm_privacy_removal(command, env_json)?;
@@ -269,17 +257,7 @@ fn print_tag_tool_configs(configs: &[crate::db::TagToolConfigRow], label: &str) 
 
 pub fn run_list(cwd: &Path) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (project_db, workspace_db) = match &ctx {
-        Context::Project {
-            project_db,
-            workspace,
-            ..
-        } => {
-            let ws = workspace.as_ref().map(|w| &w.workspace_db);
-            (project_db, ws)
-        }
-        _ => bail!("must be inside a project to list tools"),
-    };
+    let (_, project_db, workspace_db) = ctx.require_project_with_workspace()?;
 
     let mut found = false;
     found |= print_tool_configs(&project_db.list_tool_configs()?, "Project");
@@ -303,9 +281,7 @@ pub fn run_remove(
     tag: Option<&str>,
 ) -> Result<()> {
     let ctx = discover(cwd)?;
-    let Context::Project { project_db, .. } = &ctx else {
-        bail!("must be inside a project to remove tools");
-    };
+    let (_, project_db) = ctx.require_project()?;
 
     let count = if let Some(tag_name) = tag {
         project_db.remove_tag_tool_config(name, tag_name, file_type)?

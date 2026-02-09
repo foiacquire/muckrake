@@ -1,4 +1,27 @@
-pub const PROJECT_SCHEMA: &str = "
+const TOOL_TABLES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS tool_config (
+    id INTEGER PRIMARY KEY,
+    scope TEXT,
+    action TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    command TEXT NOT NULL,
+    env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS tag_tool_config (
+    id INTEGER PRIMARY KEY,
+    tag TEXT NOT NULL,
+    action TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    command TEXT NOT NULL,
+    env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(tag, action, file_type)
+);
+";
+
+pub const PROJECT_SCHEMA_PREFIX: &str = "
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY,
     pattern TEXT NOT NULL UNIQUE,
@@ -64,28 +87,9 @@ CREATE TABLE IF NOT EXISTS file_tags (
     file_hash TEXT,
     PRIMARY KEY (file_id, tag)
 );
+";
 
-CREATE TABLE IF NOT EXISTS tool_config (
-    id INTEGER PRIMARY KEY,
-    scope TEXT,
-    action TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    command TEXT NOT NULL,
-    env TEXT,
-    quiet INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS tag_tool_config (
-    id INTEGER PRIMARY KEY,
-    tag TEXT NOT NULL,
-    action TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    command TEXT NOT NULL,
-    env TEXT,
-    quiet INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(tag, action, file_type)
-);
-
+const PROJECT_SCHEMA_SUFFIX: &str = "
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY,
     timestamp TEXT NOT NULL,
@@ -96,7 +100,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 ";
 
-pub const WORKSPACE_SCHEMA: &str = "
+pub const WORKSPACE_SCHEMA_PREFIX: &str = "
 CREATE TABLE IF NOT EXISTS workspace_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -123,28 +127,9 @@ CREATE TABLE IF NOT EXISTS default_category_policy (
     protection_level TEXT NOT NULL DEFAULT 'editable',
     UNIQUE(default_category_id)
 );
+";
 
-CREATE TABLE IF NOT EXISTS tool_config (
-    id INTEGER PRIMARY KEY,
-    scope TEXT,
-    action TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    command TEXT NOT NULL,
-    env TEXT,
-    quiet INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS tag_tool_config (
-    id INTEGER PRIMARY KEY,
-    tag TEXT NOT NULL,
-    action TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    command TEXT NOT NULL,
-    env TEXT,
-    quiet INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(tag, action, file_type)
-);
-
+const WORKSPACE_SCHEMA_SUFFIX: &str = "
 CREATE TABLE IF NOT EXISTS entity_links (
     id INTEGER PRIMARY KEY,
     entity_name TEXT NOT NULL,
@@ -154,3 +139,12 @@ CREATE TABLE IF NOT EXISTS entity_links (
     UNIQUE(entity_name, entity_type, project_name)
 );
 ";
+
+use std::sync::LazyLock;
+
+pub static PROJECT_SCHEMA: LazyLock<String> =
+    LazyLock::new(|| format!("{PROJECT_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}"));
+
+pub static WORKSPACE_SCHEMA: LazyLock<String> = LazyLock::new(|| {
+    format!("{WORKSPACE_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
+});

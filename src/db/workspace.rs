@@ -26,7 +26,7 @@ impl WorkspaceDb {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to create workspace db at {}", path.display()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(WORKSPACE_SCHEMA)?;
+        conn.execute_batch(&WORKSPACE_SCHEMA)?;
         migrate(&conn)?;
         Ok(Self { conn })
     }
@@ -100,51 +100,23 @@ impl WorkspaceDb {
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let (sql, values) = Query::select()
-            .columns([
-                Projects::Id,
-                Projects::Name,
-                Projects::Path,
-                Projects::Description,
-                Projects::CreatedAt,
-            ])
+            .columns(PROJECT_COLUMNS)
             .from(Projects::Table)
             .order_by(Projects::Name, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), |row| {
-            Ok(ProjectRow {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                description: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_project)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_project_by_name(&self, name: &str) -> Result<Option<ProjectRow>> {
         let (sql, values) = Query::select()
-            .columns([
-                Projects::Id,
-                Projects::Name,
-                Projects::Path,
-                Projects::Description,
-                Projects::CreatedAt,
-            ])
+            .columns(PROJECT_COLUMNS)
             .from(Projects::Table)
             .and_where(Expr::col(Projects::Name).eq(name))
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(&*values.as_params(), |row| {
-            Ok(ProjectRow {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                path: row.get(2)?,
-                description: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_project)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -458,36 +430,38 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_default_category_policy_table(conn)
 }
 
-fn migrate_tool_config_quiet(conn: &Connection) -> Result<()> {
-    let table_exists = conn.prepare("SELECT id FROM tool_config LIMIT 0").is_ok();
+fn migrate_add_column(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<()> {
+    let table_exists = conn
+        .prepare(&format!("SELECT id FROM {table} LIMIT 0"))
+        .is_ok();
     if !table_exists {
         return Ok(());
     }
-    let has_quiet = conn
-        .prepare("SELECT quiet FROM tool_config LIMIT 0")
+    let has_column = conn
+        .prepare(&format!("SELECT {column} FROM {table} LIMIT 0"))
         .is_ok();
-    if !has_quiet {
-        conn.execute_batch("ALTER TABLE tool_config ADD COLUMN quiet INTEGER NOT NULL DEFAULT 1;")?;
+    if !has_column {
+        conn.execute_batch(alter_sql)?;
     }
     Ok(())
 }
 
+fn migrate_tool_config_quiet(conn: &Connection) -> Result<()> {
+    migrate_add_column(
+        conn,
+        "tool_config",
+        "quiet",
+        "ALTER TABLE tool_config ADD COLUMN quiet INTEGER NOT NULL DEFAULT 1;",
+    )
+}
+
 fn migrate_tag_tool_config_quiet(conn: &Connection) -> Result<()> {
-    let table_exists = conn
-        .prepare("SELECT id FROM tag_tool_config LIMIT 0")
-        .is_ok();
-    if !table_exists {
-        return Ok(());
-    }
-    let has_quiet = conn
-        .prepare("SELECT quiet FROM tag_tool_config LIMIT 0")
-        .is_ok();
-    if !has_quiet {
-        conn.execute_batch(
-            "ALTER TABLE tag_tool_config ADD COLUMN quiet INTEGER NOT NULL DEFAULT 1;",
-        )?;
-    }
-    Ok(())
+    migrate_add_column(
+        conn,
+        "tag_tool_config",
+        "quiet",
+        "ALTER TABLE tag_tool_config ADD COLUMN quiet INTEGER NOT NULL DEFAULT 1;",
+    )
 }
 
 fn migrate_default_category_type(conn: &Connection) -> Result<()> {
@@ -529,6 +503,14 @@ fn migrate_default_category_policy_table(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+const PROJECT_COLUMNS: [Projects; 5] = [
+    Projects::Id,
+    Projects::Name,
+    Projects::Path,
+    Projects::Description,
+    Projects::CreatedAt,
+];
+
 #[derive(Debug, Clone)]
 pub struct ProjectRow {
     pub id: i64,
@@ -538,11 +520,60 @@ pub struct ProjectRow {
     pub created_at: String,
 }
 
+fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
+    Ok(ProjectRow {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        path: row.get(2)?,
+        description: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::CategoryType;
     use tempfile::TempDir;
+
+    const OLD_SCHEMA_BASE: &str = "
+        CREATE TABLE IF NOT EXISTS workspace_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            path TEXT NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS tool_config (
+            id INTEGER PRIMARY KEY,
+            scope TEXT,
+            action TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            command TEXT NOT NULL,
+            env TEXT
+        );
+        CREATE TABLE IF NOT EXISTS tag_tool_config (
+            id INTEGER PRIMARY KEY,
+            tag TEXT NOT NULL,
+            action TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            command TEXT NOT NULL,
+            env TEXT,
+            UNIQUE(tag, action, file_type)
+        );
+        CREATE TABLE IF NOT EXISTS entity_links (
+            id INTEGER PRIMARY KEY,
+            entity_name TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            project_name TEXT NOT NULL,
+            project_entity_id INTEGER,
+            UNIQUE(entity_name, entity_type, project_name)
+        );
+    ";
 
     fn setup() -> (TempDir, WorkspaceDb) {
         let dir = TempDir::new().unwrap();
@@ -699,54 +730,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join(".mksp");
 
-        let old_schema = "
-            CREATE TABLE IF NOT EXISTS workspace_config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS projects (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                path TEXT NOT NULL,
-                description TEXT,
-                created_at TEXT NOT NULL
-            );
+        let old_categories = "
             CREATE TABLE IF NOT EXISTS default_categories (
                 id INTEGER PRIMARY KEY,
                 pattern TEXT NOT NULL UNIQUE,
                 protection_level TEXT NOT NULL,
                 description TEXT
             );
-            CREATE TABLE IF NOT EXISTS tool_config (
-                id INTEGER PRIMARY KEY,
-                scope TEXT,
-                action TEXT NOT NULL,
-                file_type TEXT NOT NULL,
-                command TEXT NOT NULL,
-                env TEXT
-            );
-            CREATE TABLE IF NOT EXISTS tag_tool_config (
-                id INTEGER PRIMARY KEY,
-                tag TEXT NOT NULL,
-                action TEXT NOT NULL,
-                file_type TEXT NOT NULL,
-                command TEXT NOT NULL,
-                env TEXT,
-                UNIQUE(tag, action, file_type)
-            );
-            CREATE TABLE IF NOT EXISTS entity_links (
-                id INTEGER PRIMARY KEY,
-                entity_name TEXT NOT NULL,
-                entity_type TEXT NOT NULL,
-                project_name TEXT NOT NULL,
-                project_entity_id INTEGER,
-                UNIQUE(entity_name, entity_type, project_name)
-            );
         ";
+        let old_schema = format!("{OLD_SCHEMA_BASE}{old_categories}");
         let conn = Connection::open(&db_path).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
-        conn.execute_batch(old_schema).unwrap();
+        conn.execute_batch(&old_schema).unwrap();
         conn.execute(
             "INSERT INTO default_categories (pattern, protection_level, description) VALUES (?1, ?2, ?3)",
             rusqlite::params!["evidence/**", "immutable", "Evidence"],
@@ -765,18 +761,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join(".mksp");
 
-        let old_schema = "
-            CREATE TABLE IF NOT EXISTS workspace_config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS projects (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                path TEXT NOT NULL,
-                description TEXT,
-                created_at TEXT NOT NULL
-            );
+        let old_categories = "
             CREATE TABLE IF NOT EXISTS default_categories (
                 id INTEGER PRIMARY KEY,
                 pattern TEXT NOT NULL UNIQUE,
@@ -784,36 +769,12 @@ mod tests {
                 protection_level TEXT NOT NULL,
                 description TEXT
             );
-            CREATE TABLE IF NOT EXISTS tool_config (
-                id INTEGER PRIMARY KEY,
-                scope TEXT,
-                action TEXT NOT NULL,
-                file_type TEXT NOT NULL,
-                command TEXT NOT NULL,
-                env TEXT
-            );
-            CREATE TABLE IF NOT EXISTS tag_tool_config (
-                id INTEGER PRIMARY KEY,
-                tag TEXT NOT NULL,
-                action TEXT NOT NULL,
-                file_type TEXT NOT NULL,
-                command TEXT NOT NULL,
-                env TEXT,
-                UNIQUE(tag, action, file_type)
-            );
-            CREATE TABLE IF NOT EXISTS entity_links (
-                id INTEGER PRIMARY KEY,
-                entity_name TEXT NOT NULL,
-                entity_type TEXT NOT NULL,
-                project_name TEXT NOT NULL,
-                project_entity_id INTEGER,
-                UNIQUE(entity_name, entity_type, project_name)
-            );
         ";
+        let old_schema = format!("{OLD_SCHEMA_BASE}{old_categories}");
         let conn = Connection::open(&db_path).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
-        conn.execute_batch(old_schema).unwrap();
+        conn.execute_batch(&old_schema).unwrap();
         conn.execute(
             "INSERT INTO default_categories (pattern, category_type, protection_level, description) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params!["evidence/**", "files", "immutable", "Evidence"],
