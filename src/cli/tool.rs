@@ -11,12 +11,44 @@ use crate::reference::{parse_reference, resolve_references};
 use crate::tools;
 use crate::util::whoami;
 
+struct ToolRef {
+    project: Option<String>,
+    name: String,
+}
+
+fn parse_tool_ref(input: &str) -> Result<ToolRef> {
+    if !input.starts_with(':') {
+        return Ok(ToolRef {
+            project: None,
+            name: input.to_string(),
+        });
+    }
+    let body = &input[1..];
+    if body.is_empty() {
+        bail!("empty tool reference");
+    }
+    if let Some((project, name)) = body.split_once('.') {
+        if project.is_empty() || name.is_empty() {
+            bail!("invalid tool reference '{input}'");
+        }
+        Ok(ToolRef {
+            project: Some(project.to_string()),
+            name: name.to_string(),
+        })
+    } else {
+        Ok(ToolRef {
+            project: None,
+            name: body.to_string(),
+        })
+    }
+}
+
 pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
     if args.is_empty() {
         bail!("tool name required: mkrk tool <name> [references...]");
     }
 
-    let tool_name = &args[0];
+    let tool_ref = parse_tool_ref(&args[0])?;
     let raw_refs = &args[1..];
 
     let ctx = discover(cwd)?;
@@ -24,13 +56,16 @@ pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
 
     let (file_paths, resolved_files) = resolve_file_refs(raw_refs, project_root, &ctx)?;
 
-    let candidate = resolve_db_tool(tool_name, &resolved_files, project_db, workspace_db)?;
-
-    let (command_str, env_json, quiet) = if let Some(c) = candidate {
-        (c.command, c.env, c.quiet)
+    let (command_str, env_json, quiet) = if let Some(ref proj_name) = tool_ref.project {
+        find_cross_project_tool(&ctx, proj_name, &tool_ref.name, &resolved_files)?
     } else {
-        let tool_path = discover_tool(project_root, project_db, tool_name)?;
-        (tool_path.to_string_lossy().to_string(), None, true)
+        find_local_tool(
+            &tool_ref.name,
+            &resolved_files,
+            project_root,
+            project_db,
+            workspace_db,
+        )?
     };
 
     let env_map = tools::build_tool_env(env_json.as_deref(), &command_str);
@@ -43,16 +78,58 @@ pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
 
     let user = whoami();
     let detail = serde_json::json!({
-        "tool": tool_name,
+        "tool": args[0],
         "files": file_paths,
     });
     project_db.insert_audit("tool", None, Some(&user), Some(&detail.to_string()))?;
 
     if !status.success() {
-        bail!("tool '{tool_name}' exited with {status}");
+        bail!("tool '{}' exited with {status}", tool_ref.name);
     }
 
     Ok(())
+}
+
+fn find_local_tool(
+    tool_name: &str,
+    resolved_files: &[ResolvedFileInfo],
+    project_root: &Path,
+    project_db: &ProjectDb,
+    workspace_db: Option<&WorkspaceDb>,
+) -> Result<(String, Option<String>, bool)> {
+    let candidate = resolve_db_tool(tool_name, resolved_files, project_db, workspace_db)?;
+    if let Some(c) = candidate {
+        return Ok((c.command, c.env, c.quiet));
+    }
+    let tool_path = discover_tool(project_root, project_db, tool_name)?;
+    Ok((tool_path.to_string_lossy().to_string(), None, true))
+}
+
+fn find_cross_project_tool(
+    ctx: &Context,
+    project_name: &str,
+    tool_name: &str,
+    resolved_files: &[ResolvedFileInfo],
+) -> Result<(String, Option<String>, bool)> {
+    let (ws_root, ws_db) = match ctx {
+        Context::Project {
+            workspace: Some(ws),
+            ..
+        } => (&ws.workspace_root, &ws.workspace_db),
+        Context::Workspace {
+            workspace_root,
+            workspace_db,
+        } => (workspace_root, workspace_db),
+        _ => bail!("cross-project tool reference requires workspace context"),
+    };
+
+    let project = ws_db
+        .get_project_by_name(project_name)?
+        .ok_or_else(|| anyhow::anyhow!("project '{project_name}' not found in workspace"))?;
+    let proj_root = ws_root.join(&project.path);
+    let proj_db = ProjectDb::open(&proj_root.join(".mkrk"))?;
+
+    find_local_tool(tool_name, resolved_files, &proj_root, &proj_db, Some(ws_db))
 }
 
 fn build_and_run_command(
@@ -225,92 +302,99 @@ pub fn run_add(cwd: &Path, params: &AddToolParams<'_>) -> Result<()> {
     Ok(())
 }
 
-fn print_tool_configs(configs: &[crate::db::ToolConfigRow], label: &str) -> bool {
-    if configs.is_empty() {
-        return false;
-    }
-    eprintln!("{label} tool configs:");
-    for c in configs {
-        let scope = c.scope.as_deref().unwrap_or("(default)");
-        let quiet_label = if c.quiet { "" } else { " [verbose]" };
-        eprintln!(
-            "  {:<12} scope={:<20} type={:<8} cmd={}{}",
-            c.action, scope, c.file_type, c.command, quiet_label
-        );
-    }
-    true
-}
-
-fn print_tag_tool_configs(configs: &[crate::db::TagToolConfigRow], label: &str) -> bool {
-    if configs.is_empty() {
-        return false;
-    }
-    eprintln!("{label} tag tool configs:");
-    for c in configs {
-        let quiet_label = if c.quiet { "" } else { " [verbose]" };
-        eprintln!(
-            "  {:<12} tag={:<20} type={:<8} cmd={}{}",
-            c.action, c.tag, c.file_type, c.command, quiet_label
-        );
-    }
-    true
-}
-
 pub fn run_list(cwd: &Path) -> Result<()> {
     let ctx = discover(cwd)?;
-    let found = match &ctx {
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
+
+    match &ctx {
         Context::Project {
             project_root,
             project_db,
             workspace,
         } => {
             if let Some(ws) = workspace {
-                list_workspace_tools(&ws.workspace_root, &ws.workspace_db)?
+                collect_workspace_entries(&ws.workspace_root, &ws.workspace_db, &mut entries)?;
             } else {
-                list_project_tools(project_root, project_db, "Project")?
+                collect_project_entries(project_root, project_db, None, &mut entries)?;
             }
         }
         Context::Workspace {
             workspace_root,
             workspace_db,
-        } => list_workspace_tools(workspace_root, workspace_db)?,
+        } => collect_workspace_entries(workspace_root, workspace_db, &mut entries)?,
         Context::None => bail!("no project or workspace found"),
-    };
+    }
 
-    if !found {
+    if entries.is_empty() {
         eprintln!("No tools found.");
+        return Ok(());
+    }
+
+    entries.sort();
+    entries.dedup();
+
+    let mut name_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (name, _) in &entries {
+        *name_counts.entry(name.as_str()).or_insert(0) += 1;
+    }
+
+    for (name, project) in &entries {
+        if name_counts[name.as_str()] > 1 {
+            if let Some(proj) = project {
+                println!(":{proj}.{name}");
+            } else {
+                println!("{name}");
+            }
+        } else {
+            println!("{name}");
+        }
     }
 
     Ok(())
 }
 
-fn list_workspace_tools(workspace_root: &Path, workspace_db: &WorkspaceDb) -> Result<bool> {
-    let mut found = false;
-    found |= print_tool_configs(&workspace_db.list_tool_configs()?, "Workspace");
-    found |= print_tag_tool_configs(&workspace_db.list_tag_tool_configs()?, "Workspace");
+fn collect_project_entries(
+    project_root: &Path,
+    project_db: &ProjectDb,
+    project_name: Option<&str>,
+    entries: &mut Vec<(String, Option<String>)>,
+) -> Result<()> {
+    let proj = project_name.map(String::from);
+
+    for config in project_db.list_tool_configs()? {
+        entries.push((config.action.clone(), proj.clone()));
+    }
+    for config in project_db.list_tag_tool_configs()? {
+        entries.push((config.action.clone(), proj.clone()));
+    }
+    for (name, _) in discover_all_tools(project_root, project_db) {
+        entries.push((name, proj.clone()));
+    }
+
+    Ok(())
+}
+
+fn collect_workspace_entries(
+    workspace_root: &Path,
+    workspace_db: &WorkspaceDb,
+    entries: &mut Vec<(String, Option<String>)>,
+) -> Result<()> {
+    for config in workspace_db.list_tool_configs()? {
+        entries.push((config.action.clone(), None));
+    }
+    for config in workspace_db.list_tag_tool_configs()? {
+        entries.push((config.action.clone(), None));
+    }
 
     for proj in workspace_db.list_projects()? {
         let proj_root = workspace_root.join(&proj.path);
         let proj_mkrk = proj_root.join(".mkrk");
         if let Ok(proj_db) = ProjectDb::open(&proj_mkrk) {
-            let label = format!("Project({})", proj.name);
-            found |= list_project_tools(&proj_root, &proj_db, &label)?;
+            collect_project_entries(&proj_root, &proj_db, Some(&proj.name), entries)?;
         }
     }
 
-    Ok(found)
-}
-
-fn list_project_tools(
-    project_root: &Path,
-    project_db: &ProjectDb,
-    label: &str,
-) -> Result<bool> {
-    let mut found = false;
-    found |= print_tool_configs(&project_db.list_tool_configs()?, label);
-    found |= print_tag_tool_configs(&project_db.list_tag_tool_configs()?, label);
-    found |= print_filesystem_tools(project_root, project_db, label);
-    Ok(found)
+    Ok(())
 }
 
 pub fn run_remove(
@@ -338,27 +422,34 @@ pub fn run_remove(
     Ok(())
 }
 
-fn tool_category_dirs(project_root: &Path, project_db: &ProjectDb) -> Vec<PathBuf> {
+fn tool_patterns(project_root: &Path, project_db: &ProjectDb) -> Vec<String> {
     let Ok(categories) = project_db.list_categories() else {
         return vec![];
     };
-    categories
+    let mut patterns = Vec::new();
+    for cat in categories
         .iter()
         .filter(|c| c.category_type == CategoryType::Tools)
-        .filter_map(|c| {
-            let base = c.pattern.split("/**").next()?;
-            let dir = project_root.join(base);
-            dir.is_dir().then_some(dir)
-        })
-        .collect()
+    {
+        let root = project_root.display();
+        // Category patterns use `**` for recursive matching (e.g., `tools/**`).
+        // The glob crate's `**` only matches subdirectory contents, not direct
+        // children. Emit both `tools/*` and `tools/**/*` to cover all depths.
+        if cat.pattern.ends_with("/**") {
+            let base = &cat.pattern[..cat.pattern.len() - 3];
+            patterns.push(format!("{root}/{base}/*"));
+            patterns.push(format!("{root}/{base}/**/*"));
+        } else {
+            patterns.push(format!("{root}/{}", cat.pattern));
+        }
+    }
+    patterns
 }
 
 fn discover_all_tools(project_root: &Path, project_db: &ProjectDb) -> Vec<(String, PathBuf)> {
-    let dirs = tool_category_dirs(project_root, project_db);
     let mut tools: Vec<(String, PathBuf)> = Vec::new();
 
-    for dir in &dirs {
-        let pattern = format!("{}/*", dir.display());
+    for pattern in tool_patterns(project_root, project_db) {
         let Ok(entries) = glob::glob(&pattern) else {
             continue;
         };
@@ -379,45 +470,26 @@ fn discover_all_tools(project_root: &Path, project_db: &ProjectDb) -> Vec<(Strin
     tools
 }
 
-fn print_filesystem_tools(project_root: &Path, project_db: &ProjectDb, label: &str) -> bool {
-    let tools = discover_all_tools(project_root, project_db);
-    if tools.is_empty() {
-        return false;
-    }
-    eprintln!("{label} filesystem tools:");
-    for (name, path) in &tools {
-        eprintln!("  {:<12} {}", name, path.display());
-    }
-    true
-}
-
 fn discover_tool(project_root: &Path, project_db: &ProjectDb, name: &str) -> Result<PathBuf> {
     if name.contains('/') || name.contains("..") {
         bail!("tool name '{name}' contains invalid path characters");
     }
 
-    let dirs = tool_category_dirs(project_root, project_db);
-    for dir in &dirs {
-        let exact = dir.join(name);
-        if exact.is_file() {
-            return Ok(exact);
-        }
-        let pattern = format!("{}/{}.*", dir.display(), name);
-        if let Ok(mut matches) = glob::glob(&pattern) {
-            if let Some(Ok(path)) = matches.next() {
-                if path.is_file() {
-                    return Ok(path);
-                }
+    for pattern in tool_patterns(project_root, project_db) {
+        let Ok(entries) = glob::glob(&pattern) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.is_file() {
+                continue;
+            }
+            if entry.file_stem().map(|s| s.to_string_lossy()).as_deref() == Some(name) {
+                return Ok(entry);
             }
         }
     }
 
-    let searched: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
-    bail!(
-        "tool '{}' not found in database or filesystem (searched: {})",
-        name,
-        searched.join(", ")
-    )
+    bail!("tool '{name}' not found")
 }
 
 #[cfg(test)]
@@ -507,5 +579,36 @@ mod tests {
 
         let found = discover_tool(dir.path(), &db, "ocr").unwrap();
         assert_eq!(found, tool);
+    }
+
+    #[test]
+    fn parse_tool_ref_plain_name() {
+        let r = parse_tool_ref("ner").unwrap();
+        assert!(r.project.is_none());
+        assert_eq!(r.name, "ner");
+    }
+
+    #[test]
+    fn parse_tool_ref_with_project() {
+        let r = parse_tool_ref(":bailey.ner").unwrap();
+        assert_eq!(r.project.as_deref(), Some("bailey"));
+        assert_eq!(r.name, "ner");
+    }
+
+    #[test]
+    fn parse_tool_ref_bare_colon_name() {
+        let r = parse_tool_ref(":ner").unwrap();
+        assert!(r.project.is_none());
+        assert_eq!(r.name, "ner");
+    }
+
+    #[test]
+    fn parse_tool_ref_empty() {
+        assert!(parse_tool_ref(":").is_err());
+    }
+
+    #[test]
+    fn parse_tool_ref_invalid_trailing_dot() {
+        assert!(parse_tool_ref(":bailey.").is_err());
     }
 }
