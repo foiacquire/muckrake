@@ -186,4 +186,26 @@ mod tests {
         let result = verify_file(Path::new("/nonexistent/file"), "abc").unwrap();
         assert_eq!(result, VerifyResult::Missing);
     }
+
+    #[test]
+    fn set_immutable_marks_file_readonly() {
+        let tmp = NamedTempFile::new().unwrap();
+        set_immutable(tmp.path()).unwrap();
+        assert!(is_immutable(tmp.path()).unwrap());
+        clear_immutable(tmp.path()).unwrap();
+    }
+
+    #[test]
+    fn clear_immutable_removes_readonly() {
+        let tmp = NamedTempFile::new().unwrap();
+        set_immutable(tmp.path()).unwrap();
+        clear_immutable(tmp.path()).unwrap();
+        assert!(!is_immutable(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn is_immutable_false_by_default() {
+        let tmp = NamedTempFile::new().unwrap();
+        assert!(!is_immutable(tmp.path()).unwrap());
+    }
 }
