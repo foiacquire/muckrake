@@ -6,6 +6,7 @@ use console::style;
 
 use crate::context::{discover, Context};
 use crate::db::{ProjectDb, WorkspaceDb};
+use crate::models::CategoryType;
 use crate::reference::{parse_reference, resolve_references};
 use crate::tools;
 use crate::util::whoami;
@@ -28,7 +29,7 @@ pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
     let (command_str, env_json, quiet) = if let Some(c) = candidate {
         (c.command, c.env, c.quiet)
     } else {
-        let tool_path = discover_tool(project_root, tool_name)?;
+        let tool_path = discover_tool(project_root, project_db, tool_name)?;
         (tool_path.to_string_lossy().to_string(), None, true)
     };
 
@@ -257,20 +258,59 @@ fn print_tag_tool_configs(configs: &[crate::db::TagToolConfigRow], label: &str) 
 
 pub fn run_list(cwd: &Path) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (_, project_db, workspace_db) = ctx.require_project_with_workspace()?;
+    let found = match &ctx {
+        Context::Project {
+            project_root,
+            project_db,
+            workspace,
+        } => {
+            if let Some(ws) = workspace {
+                list_workspace_tools(&ws.workspace_root, &ws.workspace_db)?
+            } else {
+                list_project_tools(project_root, project_db, "Project")?
+            }
+        }
+        Context::Workspace {
+            workspace_root,
+            workspace_db,
+        } => list_workspace_tools(workspace_root, workspace_db)?,
+        Context::None => bail!("no project or workspace found"),
+    };
 
-    let mut found = false;
-    found |= print_tool_configs(&project_db.list_tool_configs()?, "Project");
-    found |= print_tag_tool_configs(&project_db.list_tag_tool_configs()?, "Project");
-    if let Some(ws_db) = workspace_db {
-        found |= print_tool_configs(&ws_db.list_tool_configs()?, "Workspace");
-        found |= print_tag_tool_configs(&ws_db.list_tag_tool_configs()?, "Workspace");
-    }
     if !found {
-        eprintln!("No tool configurations registered.");
+        eprintln!("No tools found.");
     }
 
     Ok(())
+}
+
+fn list_workspace_tools(workspace_root: &Path, workspace_db: &WorkspaceDb) -> Result<bool> {
+    let mut found = false;
+    found |= print_tool_configs(&workspace_db.list_tool_configs()?, "Workspace");
+    found |= print_tag_tool_configs(&workspace_db.list_tag_tool_configs()?, "Workspace");
+
+    for proj in workspace_db.list_projects()? {
+        let proj_root = workspace_root.join(&proj.path);
+        let proj_mkrk = proj_root.join(".mkrk");
+        if let Ok(proj_db) = ProjectDb::open(&proj_mkrk) {
+            let label = format!("Project({})", proj.name);
+            found |= list_project_tools(&proj_root, &proj_db, &label)?;
+        }
+    }
+
+    Ok(found)
+}
+
+fn list_project_tools(
+    project_root: &Path,
+    project_db: &ProjectDb,
+    label: &str,
+) -> Result<bool> {
+    let mut found = false;
+    found |= print_tool_configs(&project_db.list_tool_configs()?, label);
+    found |= print_tag_tool_configs(&project_db.list_tag_tool_configs()?, label);
+    found |= print_filesystem_tools(project_root, project_db, label);
+    Ok(found)
 }
 
 pub fn run_remove(
@@ -298,72 +338,136 @@ pub fn run_remove(
     Ok(())
 }
 
-fn discover_tool(project_root: &Path, name: &str) -> Result<PathBuf> {
+fn tool_category_dirs(project_root: &Path, project_db: &ProjectDb) -> Vec<PathBuf> {
+    let Ok(categories) = project_db.list_categories() else {
+        return vec![];
+    };
+    categories
+        .iter()
+        .filter(|c| c.category_type == CategoryType::Tools)
+        .filter_map(|c| {
+            let base = c.pattern.split("/**").next()?;
+            let dir = project_root.join(base);
+            dir.is_dir().then_some(dir)
+        })
+        .collect()
+}
+
+fn discover_all_tools(project_root: &Path, project_db: &ProjectDb) -> Vec<(String, PathBuf)> {
+    let dirs = tool_category_dirs(project_root, project_db);
+    let mut tools: Vec<(String, PathBuf)> = Vec::new();
+
+    for dir in &dirs {
+        let pattern = format!("{}/*", dir.display());
+        let Ok(entries) = glob::glob(&pattern) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.is_file() {
+                continue;
+            }
+            if let Some(name) = entry.file_stem() {
+                let name = name.to_string_lossy().to_string();
+                if !tools.iter().any(|(n, _)| n == &name) {
+                    tools.push((name, entry));
+                }
+            }
+        }
+    }
+
+    tools.sort_by(|a, b| a.0.cmp(&b.0));
+    tools
+}
+
+fn print_filesystem_tools(project_root: &Path, project_db: &ProjectDb, label: &str) -> bool {
+    let tools = discover_all_tools(project_root, project_db);
+    if tools.is_empty() {
+        return false;
+    }
+    eprintln!("{label} filesystem tools:");
+    for (name, path) in &tools {
+        eprintln!("  {:<12} {}", name, path.display());
+    }
+    true
+}
+
+fn discover_tool(project_root: &Path, project_db: &ProjectDb, name: &str) -> Result<PathBuf> {
     if name.contains('/') || name.contains("..") {
         bail!("tool name '{name}' contains invalid path characters");
     }
 
-    let tools_dir = project_root.join("tools");
-    let exact = tools_dir.join(name);
-    if exact.is_file() {
-        return Ok(exact);
-    }
-
-    let pattern = format!("{}/{}.*", tools_dir.display(), name);
-    let mut matches = glob::glob(&pattern)?;
-    if let Some(entry) = matches.next() {
-        let path = entry?;
-        if path.is_file() {
-            return Ok(path);
+    let dirs = tool_category_dirs(project_root, project_db);
+    for dir in &dirs {
+        let exact = dir.join(name);
+        if exact.is_file() {
+            return Ok(exact);
+        }
+        let pattern = format!("{}/{}.*", dir.display(), name);
+        if let Ok(mut matches) = glob::glob(&pattern) {
+            if let Some(Ok(path)) = matches.next() {
+                if path.is_file() {
+                    return Ok(path);
+                }
+            }
         }
     }
 
+    let searched: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
     bail!(
-        "tool '{}' not found in database or {}",
+        "tool '{}' not found in database or filesystem (searched: {})",
         name,
-        tools_dir.display()
+        searched.join(", ")
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Category;
     use tempfile::TempDir;
 
-    fn setup_tools_dir(dir: &Path) -> PathBuf {
+    fn setup_project_with_tools(dir: &Path) -> (PathBuf, ProjectDb) {
         let tools_dir = dir.join("tools");
         std::fs::create_dir_all(&tools_dir).unwrap();
-        tools_dir
+        let db = ProjectDb::create(&dir.join(".mkrk")).unwrap();
+        db.insert_category(&Category {
+            id: None,
+            pattern: "tools/**".to_string(),
+            category_type: CategoryType::Tools,
+            description: None,
+        })
+        .unwrap();
+        (tools_dir, db)
     }
 
     #[test]
     fn discover_tool_exact() {
         let dir = TempDir::new().unwrap();
-        let tools_dir = setup_tools_dir(dir.path());
+        let (tools_dir, db) = setup_project_with_tools(dir.path());
         let tool = tools_dir.join("ner");
         std::fs::write(&tool, "#!/bin/sh\necho hi").unwrap();
 
-        let found = discover_tool(dir.path(), "ner").unwrap();
+        let found = discover_tool(dir.path(), &db, "ner").unwrap();
         assert_eq!(found, tool);
     }
 
     #[test]
     fn discover_tool_with_extension() {
         let dir = TempDir::new().unwrap();
-        let tools_dir = setup_tools_dir(dir.path());
+        let (tools_dir, db) = setup_project_with_tools(dir.path());
         let tool = tools_dir.join("ner.py");
         std::fs::write(&tool, "print('hi')").unwrap();
 
-        let found = discover_tool(dir.path(), "ner").unwrap();
+        let found = discover_tool(dir.path(), &db, "ner").unwrap();
         assert_eq!(found, tool);
     }
 
     #[test]
     fn discover_tool_not_found() {
         let dir = TempDir::new().unwrap();
-        setup_tools_dir(dir.path());
+        let (_, db) = setup_project_with_tools(dir.path());
 
-        let result = discover_tool(dir.path(), "missing");
+        let result = discover_tool(dir.path(), &db, "missing");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not found"), "unexpected error: {err}");
@@ -372,16 +476,36 @@ mod tests {
     #[test]
     fn discover_tool_rejects_path_traversal() {
         let dir = TempDir::new().unwrap();
-        setup_tools_dir(dir.path());
+        let (_, db) = setup_project_with_tools(dir.path());
 
-        let result = discover_tool(dir.path(), "../evil");
+        let result = discover_tool(dir.path(), &db, "../evil");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("invalid path"), "unexpected error: {err}");
 
-        let result = discover_tool(dir.path(), "sub/tool");
+        let result = discover_tool(dir.path(), &db, "sub/tool");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("invalid path"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn discover_tool_custom_category() {
+        let dir = TempDir::new().unwrap();
+        let scripts_dir = dir.path().join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        db.insert_category(&Category {
+            id: None,
+            pattern: "scripts/**".to_string(),
+            category_type: CategoryType::Tools,
+            description: None,
+        })
+        .unwrap();
+        let tool = scripts_dir.join("ocr.sh");
+        std::fs::write(&tool, "#!/bin/sh").unwrap();
+
+        let found = discover_tool(dir.path(), &db, "ocr").unwrap();
+        assert_eq!(found, tool);
     }
 }
