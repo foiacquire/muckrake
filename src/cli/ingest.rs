@@ -99,8 +99,8 @@ fn prepare_destination(
     if dest.exists() {
         bail!("destination already exists: {}", dest.display());
     }
-    if db.get_file_by_name(&file_name)?.is_some() {
-        bail!("file '{file_name}' already registered in project");
+    if db.get_file_by_path(&rel_path)?.is_some() {
+        bail!("file already registered at '{rel_path}'");
     }
 
     if let Some(parent) = dest.parent() {

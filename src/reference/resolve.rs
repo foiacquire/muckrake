@@ -34,11 +34,17 @@ impl ResolvedCollection {
 pub fn resolve_references(refs: &[Reference], ctx: &Context) -> Result<ResolvedCollection> {
     let mut all_files = Vec::new();
     let mut seen: HashSet<(Option<String>, i64)> = HashSet::new();
+    let mut next_synthetic_id: i64 = -1;
 
     for r in refs {
         let resolved = resolve_single(r, ctx)?;
         for rf in resolved {
-            let key = (rf.project_name.clone(), rf.file.id.unwrap_or(-1));
+            let dedup_id = rf.file.id.unwrap_or_else(|| {
+                let id = next_synthetic_id;
+                next_synthetic_id -= 1;
+                id
+            });
+            let key = (rf.project_name.clone(), dedup_id);
             if seen.insert(key) {
                 all_files.push(rf);
             }

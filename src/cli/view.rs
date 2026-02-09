@@ -44,7 +44,7 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     let (command_str, env_json) = resolve_tool_for_file(&file, action, project_db, workspace_db)?;
     let env_map = tools::build_tool_env(env_json.as_deref(), &command_str);
 
-    let target_path = resolve_open_path(&file_path, action, protection)?;
+    let (temp_dir, target_path) = resolve_open_path(&file_path, action, protection)?;
 
     let mut cmd = Command::new(&command_str);
     cmd.arg(&target_path);
@@ -52,8 +52,8 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
 
     let status = cmd.status()?;
 
-    if let Some(temp) = is_temp_path(&target_path, &file_path) {
-        let _ = std::fs::remove_file(&temp);
+    if let Some(dir) = temp_dir {
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     let user = whoami();
@@ -103,26 +103,27 @@ fn resolve_open_path(
     file_path: &Path,
     action: &str,
     protection: ProtectionLevel,
-) -> Result<std::path::PathBuf> {
+) -> Result<(Option<std::path::PathBuf>, std::path::PathBuf)> {
     match (action, protection) {
         ("view", ProtectionLevel::Immutable | ProtectionLevel::Protected) => {
-            let temp_dir = std::env::temp_dir().join("mkrk-view");
+            let unique_id = std::process::id();
+            let dir_name = format!("mkrk-view-{unique_id}");
+            let temp_dir = std::env::temp_dir().join(dir_name);
             std::fs::create_dir_all(&temp_dir)?;
-            let file_name = file_path
-                .file_name()
-                .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().to_string());
-            let temp_path = temp_dir.join(file_name);
-            std::fs::copy(file_path, &temp_path)?;
-            Ok(temp_path)
-        }
-        _ => Ok(file_path.to_path_buf()),
-    }
-}
 
-fn is_temp_path(target: &Path, original: &Path) -> Option<std::path::PathBuf> {
-    if target == original {
-        None
-    } else {
-        Some(target.to_path_buf())
+            let temp_path = temp_dir.join(
+                file_path
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("file")),
+            );
+
+            if temp_path.symlink_metadata().is_ok() {
+                std::fs::remove_file(&temp_path)?;
+            }
+            std::fs::copy(file_path, &temp_path)?;
+
+            Ok((Some(temp_dir), temp_path))
+        }
+        _ => Ok((None, file_path.to_path_buf())),
     }
 }

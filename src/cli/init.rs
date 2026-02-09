@@ -176,10 +176,12 @@ fn default_categories_with_policies() -> Vec<(Category, ProtectionLevel)> {
                 Category {
                     id: None,
                     pattern: (*pattern).to_string(),
-                    category_type: cat_type.parse().unwrap(),
+                    category_type: cat_type
+                        .parse()
+                        .expect("invalid default category type"),
                     description: Some((*desc).to_string()),
                 },
-                level.parse().unwrap(),
+                level.parse().expect("invalid default protection level"),
             )
         })
         .collect()
@@ -242,11 +244,16 @@ pub fn run_init_workspace(
             let cat = Category {
                 id: None,
                 pattern: (*pattern).to_string(),
-                category_type: cat_type.parse().unwrap(),
+                category_type: cat_type
+                    .parse()
+                    .expect("invalid default category type"),
                 description: Some((*desc).to_string()),
             };
             let cat_id = ws_db.insert_default_category(&cat)?;
-            ws_db.insert_default_category_policy(cat_id, &level.parse().unwrap())?;
+            ws_db.insert_default_category_policy(
+                cat_id,
+                &level.parse().expect("invalid default protection level"),
+            )?;
         }
     }
 
