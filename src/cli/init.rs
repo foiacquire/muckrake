@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
@@ -16,18 +16,21 @@ const DEFAULT_CATEGORIES: &[(&str, &str, &str, &str)] = &[
 
 pub fn run_init_project(
     cwd: &Path,
+    name: Option<&str>,
     no_categories: bool,
     custom_categories: &[String],
 ) -> Result<()> {
-    let db_path = cwd.join(".mkrk");
+    let project_dir = resolve_project_dir(cwd, name)?;
+
+    let db_path = project_dir.join(".mkrk");
     if db_path.exists() {
-        bail!("project already exists in {}", cwd.display());
+        bail!("project already exists in {}", project_dir.display());
     }
-    if cwd.join(".mksp").exists() {
-        bail!("workspace already exists in {}", cwd.display());
+    if project_dir.join(".mksp").exists() {
+        bail!("workspace already exists in {}", project_dir.display());
     }
 
-    let project_name = cwd
+    let project_name = project_dir
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -35,23 +38,59 @@ pub fn run_init_project(
         validate_name(&project_name)?;
     }
 
+    std::fs::create_dir_all(&project_dir)?;
     let project_db = ProjectDb::create(&db_path)?;
 
-    let items = resolve_categories_with_policies(cwd, no_categories, custom_categories)?;
+    let items =
+        resolve_categories_with_policies(&project_dir, no_categories, custom_categories)?;
     for (cat, level) in &items {
         let cat_id = project_db.insert_category(cat)?;
         project_db.insert_category_policy(cat_id, level)?;
     }
 
-    register_in_workspace(cwd)?;
+    register_in_workspace(&project_dir)?;
 
     let cat_count = items.len();
-    eprintln!("Initialized project in {}", cwd.display());
+    eprintln!("Initialized project in {}", project_dir.display());
     if cat_count > 0 {
         eprintln!("  {cat_count} categories configured");
     }
 
     Ok(())
+}
+
+fn resolve_project_dir(cwd: &Path, name: Option<&str>) -> Result<PathBuf> {
+    let workspace = find_workspace(cwd);
+
+    match (name, workspace) {
+        (Some(name), Some((ws_root, ws_db))) => {
+            let projects_dir = ws_db
+                .get_config("projects_dir")?
+                .ok_or_else(|| anyhow::anyhow!("workspace has no projects_dir configured"))?;
+            Ok(ws_root.join(projects_dir).join(name))
+        }
+        (Some(name), None) => Ok(cwd.join(name)),
+        (None, Some(_)) => {
+            bail!("project name required when inside a workspace")
+        }
+        (None, None) => Ok(cwd.to_path_buf()),
+    }
+}
+
+fn find_workspace(cwd: &Path) -> Option<(PathBuf, WorkspaceDb)> {
+    let mut dir = cwd.to_path_buf();
+    loop {
+        let mksp = dir.join(".mksp");
+        if mksp.exists() {
+            if let Ok(ws_db) = WorkspaceDb::open(&mksp) {
+                return Some((dir, ws_db));
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
 }
 
 fn resolve_categories_with_policies(

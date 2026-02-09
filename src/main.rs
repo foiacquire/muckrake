@@ -34,11 +34,12 @@ fn main() -> Result<()> {
 fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
     match command {
         Commands::Init {
+            name,
             workspace,
             inbox,
             no_categories,
             categories,
-        } => dispatch_init(cwd, workspace, inbox, no_categories, &categories),
+        } => dispatch_init(cwd, name.as_deref(), workspace, inbox, no_categories, &categories),
         Commands::Status => muckrake::cli::status::run(cwd),
         Commands::Ingest { paths, category } => {
             muckrake::cli::ingest::run(cwd, &paths, category.as_deref())
@@ -70,17 +71,23 @@ fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_init(
     cwd: &std::path::Path,
+    name: Option<&str>,
     workspace: Option<String>,
     inbox: bool,
     no_categories: bool,
     categories: &[String],
 ) -> Result<()> {
+    if name.is_some() && workspace.is_some() {
+        bail!("cannot specify project name with --workspace");
+    }
     workspace.map_or_else(
         || {
             muckrake::cli::init::run_init_project(
                 cwd,
+                name,
                 no_categories || !categories.is_empty(),
                 categories,
             )

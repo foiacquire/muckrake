@@ -28,6 +28,8 @@ pub struct Cli {
 pub enum Commands {
     /// Create a new project or workspace
     Init {
+        /// Project name (creates directory; required in workspaces)
+        name: Option<String>,
         /// Create a workspace instead of a project; value is the projects directory
         #[arg(short = 'w', long = "workspace")]
         workspace: Option<String>,
