@@ -1,9 +1,11 @@
 use std::env;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 
+use muckrake::cli::scope::extract_scope;
 use muckrake::cli::{Cli, Commands, InboxCommands, ToolCommands};
+use muckrake::context::resolve_scope;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -11,10 +13,22 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
-    let cwd = env::current_dir()?;
+    let raw_args: Vec<String> = env::args().collect();
+    let (scope, filtered_args) = extract_scope(raw_args);
+    let cli = Cli::parse_from(&filtered_args);
 
-    dispatch(cli.command, &cwd)
+    let real_cwd = env::current_dir()?;
+
+    let effective_cwd = if let Some(ref scope_name) = scope {
+        if matches!(cli.command, Commands::Init { .. }) {
+            bail!("scope prefix cannot be used with 'init'");
+        }
+        resolve_scope(&real_cwd, scope_name)?
+    } else {
+        real_cwd
+    };
+
+    dispatch(cli.command, &effective_cwd)
 }
 
 fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {

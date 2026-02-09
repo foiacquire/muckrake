@@ -4,6 +4,7 @@ pub mod ingest;
 pub mod init;
 pub mod list;
 pub mod projects;
+pub mod scope;
 pub mod status;
 pub mod tags;
 pub mod tool;
