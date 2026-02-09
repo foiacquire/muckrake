@@ -2,6 +2,11 @@ use std::path::Path;
 
 use anyhow::{bail, Result};
 
+#[cfg(unix)]
+const CROSS_DEVICE_ERROR: i32 = 18; // EXDEV
+#[cfg(windows)]
+const CROSS_DEVICE_ERROR: i32 = 17; // ERROR_NOT_SAME_DEVICE
+
 use crate::context::{discover, Context};
 use crate::integrity;
 use crate::models::ProtectionLevel;
@@ -93,6 +98,9 @@ fn validate_move(old_path: &Path, new_path: &Path, rel_path: &str) -> Result<()>
         .ok_or_else(|| anyhow::anyhow!("invalid destination"))?;
     std::fs::create_dir_all(new_parent)?;
 
+    // On Unix we can pre-check device IDs. On Windows, stable Rust lacks a safe
+    // API for volume identity, so we rely on rename_same_volume catching the error.
+    #[cfg(unix)]
     ensure_same_device(old_path, new_parent)?;
 
     Ok(())
@@ -111,21 +119,9 @@ fn ensure_same_device(old_path: &Path, new_parent: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
-fn ensure_same_device(_old_path: &Path, _new_parent: &Path) -> Result<()> {
-    // Stable Rust lacks a safe API to query volume identity on Windows.
-    // Cross-volume renames are caught by rename_same_volume via ERROR_NOT_SAME_DEVICE.
-    Ok(())
-}
-
 fn rename_same_volume(from: &Path, to: &Path) -> Result<()> {
     std::fs::rename(from, to).map_err(|e| {
-        #[cfg(unix)]
-        const CROSS_DEVICE: i32 = 18; // EXDEV
-        #[cfg(windows)]
-        const CROSS_DEVICE: i32 = 17; // ERROR_NOT_SAME_DEVICE
-
-        if e.raw_os_error() == Some(CROSS_DEVICE) {
+        if e.raw_os_error() == Some(CROSS_DEVICE_ERROR) {
             anyhow::anyhow!(
                 "cannot categorize across volumes ({} -> {})",
                 from.display(),
