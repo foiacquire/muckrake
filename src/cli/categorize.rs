@@ -1,4 +1,3 @@
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -37,7 +36,7 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
         integrity::clear_immutable(&old_path)?;
     }
 
-    std::fs::rename(&old_path, &new_path)?;
+    rename_same_volume(&old_path, &new_path)?;
     project_db.update_file_path(file_id, &new_rel_path)?;
 
     let new_protection = apply_protection(file_id, &new_rel_path, &new_path, project_db)?;
@@ -89,16 +88,51 @@ fn validate_move(old_path: &Path, new_path: &Path, rel_path: &str) -> Result<()>
         bail!("destination already exists: {}", new_path.display());
     }
 
-    let old_dev = old_path.metadata()?.dev();
     let new_parent = new_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("invalid destination"))?;
     std::fs::create_dir_all(new_parent)?;
+
+    ensure_same_device(old_path, new_parent)?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_same_device(old_path: &Path, new_parent: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let old_dev = old_path.metadata()?.dev();
     let new_dev = new_parent.metadata()?.dev();
 
     if old_dev != new_dev {
         bail!("cannot categorize across devices (source: dev {old_dev}, dest: dev {new_dev})");
     }
-
     Ok(())
+}
+
+#[cfg(windows)]
+fn ensure_same_device(_old_path: &Path, _new_parent: &Path) -> Result<()> {
+    // Stable Rust lacks a safe API to query volume identity on Windows.
+    // Cross-volume renames are caught by rename_same_volume via ERROR_NOT_SAME_DEVICE.
+    Ok(())
+}
+
+fn rename_same_volume(from: &Path, to: &Path) -> Result<()> {
+    std::fs::rename(from, to).map_err(|e| {
+        #[cfg(unix)]
+        const CROSS_DEVICE: i32 = 18; // EXDEV
+        #[cfg(windows)]
+        const CROSS_DEVICE: i32 = 17; // ERROR_NOT_SAME_DEVICE
+
+        if e.raw_os_error() == Some(CROSS_DEVICE) {
+            anyhow::anyhow!(
+                "cannot categorize across volumes ({} -> {})",
+                from.display(),
+                to.display(),
+            )
+        } else {
+            e.into()
+        }
+    })
 }
