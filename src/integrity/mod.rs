@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -27,14 +28,17 @@ pub fn hash_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+#[cfg(unix)]
 pub fn set_immutable(path: &Path) -> Result<()> {
     run_chattr("+i", path)
 }
 
+#[cfg(unix)]
 pub fn clear_immutable(path: &Path) -> Result<()> {
     run_chattr("-i", path)
 }
 
+#[cfg(unix)]
 fn run_chattr(flag: &str, path: &Path) -> Result<()> {
     let output = Command::new("chattr")
         .arg(flag)
@@ -53,6 +57,7 @@ fn run_chattr(flag: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 pub fn is_immutable(path: &Path) -> Result<bool> {
     let output = Command::new("lsattr")
         .arg("-d")
@@ -67,6 +72,37 @@ pub fn is_immutable(path: &Path) -> Result<bool> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let attrs = stdout.split_whitespace().next().unwrap_or("");
     Ok(attrs.contains('i'))
+}
+
+#[cfg(windows)]
+pub fn set_immutable(path: &Path) -> Result<()> {
+    let mut perms = std::fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?
+        .permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(path, perms)
+        .with_context(|| format!("failed to set readonly on {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+pub fn clear_immutable(path: &Path) -> Result<()> {
+    let mut perms = std::fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?
+        .permissions();
+    perms.set_readonly(false);
+    std::fs::set_permissions(path, perms)
+        .with_context(|| format!("failed to clear readonly on {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn is_immutable(path: &Path) -> Result<bool> {
+    let perms = std::fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?
+        .permissions();
+    Ok(perms.readonly())
 }
 
 #[derive(Debug, PartialEq, Eq)]
