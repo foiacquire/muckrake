@@ -39,8 +39,11 @@ jobs:
       - run: cargo clippy -- -D warnings
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -50,8 +53,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: test-
+          key: test-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: test-${{ matrix.os }}-
       - run: cargo test
 
   jscpd:
