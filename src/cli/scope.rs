@@ -56,8 +56,7 @@ mod tests {
 
     #[test]
     fn scope_with_trailing_refs() {
-        let (scope, filtered) =
-            extract_scope(args(&["mkrk", ":bailey", "list", ":evidence"]));
+        let (scope, filtered) = extract_scope(args(&["mkrk", ":bailey", "list", ":evidence"]));
         assert_eq!(scope.as_deref(), Some("bailey"));
         assert_eq!(filtered, args(&["mkrk", "list", ":evidence"]));
     }

@@ -136,9 +136,7 @@ pub fn resolve_scope(cwd: &Path, scope: &str) -> Result<PathBuf> {
     let project_root = ws_root.join(&project.path);
     let mkrk = project_root.join(".mkrk");
     if !mkrk.exists() {
-        bail!(
-            "project '{scope}' registered but has no .mkrk database"
-        );
+        bail!("project '{scope}' registered but has no .mkrk database");
     }
 
     Ok(project_root)

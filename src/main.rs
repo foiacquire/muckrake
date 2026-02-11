@@ -39,7 +39,14 @@ fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
             inbox,
             no_categories,
             categories,
-        } => dispatch_init(cwd, name.as_deref(), workspace, inbox, no_categories, &categories),
+        } => dispatch_init(
+            cwd,
+            name.as_deref(),
+            workspace,
+            inbox,
+            no_categories,
+            &categories,
+        ),
         Commands::Status => muckrake::cli::status::run(cwd),
         Commands::Ingest { paths, category } => {
             muckrake::cli::ingest::run(cwd, &paths, category.as_deref())

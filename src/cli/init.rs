@@ -41,8 +41,7 @@ pub fn run_init_project(
     std::fs::create_dir_all(&project_dir)?;
     let project_db = ProjectDb::create(&db_path)?;
 
-    let items =
-        resolve_categories_with_policies(&project_dir, no_categories, custom_categories)?;
+    let items = resolve_categories_with_policies(&project_dir, no_categories, custom_categories)?;
     for (cat, level) in &items {
         let cat_id = project_db.insert_category(cat)?;
         project_db.insert_category_policy(cat_id, level)?;
@@ -176,9 +175,7 @@ fn default_categories_with_policies() -> Vec<(Category, ProtectionLevel)> {
                 Category {
                     id: None,
                     pattern: (*pattern).to_string(),
-                    category_type: cat_type
-                        .parse()
-                        .expect("invalid default category type"),
+                    category_type: cat_type.parse().expect("invalid default category type"),
                     description: Some((*desc).to_string()),
                 },
                 level.parse().expect("invalid default protection level"),
@@ -244,9 +241,7 @@ pub fn run_init_workspace(
             let cat = Category {
                 id: None,
                 pattern: (*pattern).to_string(),
-                category_type: cat_type
-                    .parse()
-                    .expect("invalid default category type"),
+                category_type: cat_type.parse().expect("invalid default category type"),
                 description: Some((*desc).to_string()),
             };
             let cat_id = ws_db.insert_default_category(&cat)?;
