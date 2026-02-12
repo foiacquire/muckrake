@@ -16,10 +16,13 @@ pub fn run_list(cwd: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let entries: Vec<_> = std::fs::read_dir(&inbox_dir)?
-        .filter_map(Result::ok)
-        .filter(|e| e.path().is_file())
-        .collect();
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&inbox_dir)? {
+        let entry = entry?;
+        if entry.path().is_file() {
+            entries.push(entry);
+        }
+    }
 
     if entries.is_empty() {
         eprintln!("Inbox is empty");
@@ -29,9 +32,7 @@ pub fn run_list(cwd: &Path) -> Result<()> {
     eprintln!("Inbox ({} files):", entries.len());
     for entry in &entries {
         let name = entry.file_name().to_string_lossy().to_string();
-        let size = entry
-            .metadata()
-            .map_or_else(|_| "?".to_string(), |m| format_size(m.len() as i64));
+        let size = format_size(entry.metadata()?.len() as i64);
         eprintln!("  {} {}", style(&name).bold(), style(size).dim());
     }
 

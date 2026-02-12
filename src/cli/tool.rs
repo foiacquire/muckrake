@@ -68,11 +68,7 @@ pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
         )?
     };
 
-    let env_map = tools::build_tool_env(env_json.as_deref(), &command_str);
-
-    if !quiet {
-        eprintln!("{} {}", style(">").dim(), command_str);
-    }
+    let env_map = tools::build_tool_env(env_json.as_deref(), &command_str, quiet)?;
 
     let status = build_and_run_command(&command_str, &file_paths, &env_map, project_root, &ctx)?;
 
@@ -389,9 +385,8 @@ fn collect_workspace_entries(
     for proj in workspace_db.list_projects()? {
         let proj_root = workspace_root.join(&proj.path);
         let proj_mkrk = proj_root.join(".mkrk");
-        if let Ok(proj_db) = ProjectDb::open(&proj_mkrk) {
-            collect_project_entries(&proj_root, &proj_db, Some(&proj.name), entries)?;
-        }
+        let proj_db = ProjectDb::open(&proj_mkrk)?;
+        collect_project_entries(&proj_root, &proj_db, Some(&proj.name), entries)?;
     }
 
     Ok(())

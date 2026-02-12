@@ -42,7 +42,7 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     }
 
     let (command_str, env_json) = resolve_tool_for_file(&file, action, project_db, workspace_db)?;
-    let env_map = tools::build_tool_env(env_json.as_deref(), &command_str);
+    let env_map = tools::build_tool_env(env_json.as_deref(), &command_str, false)?;
 
     let (temp_dir, target_path) = resolve_open_path(&file_path, action, protection)?;
 
@@ -53,7 +53,12 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     let status = cmd.status()?;
 
     if let Some(dir) = temp_dir {
-        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            eprintln!(
+                "warning: failed to clean up temp dir {}: {e}",
+                dir.display()
+            );
+        }
     }
 
     let user = whoami();

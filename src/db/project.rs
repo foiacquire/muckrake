@@ -75,7 +75,16 @@ impl ProjectDb {
             Ok(Category {
                 id: Some(row.get(0)?),
                 pattern: row.get(1)?,
-                category_type: row.get::<_, String>(2)?.parse().unwrap_or_default(),
+                category_type: row.get::<_, String>(2)?.parse().map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("{e}"),
+                        )),
+                    )
+                })?,
                 description: row.get(3)?,
             })
         })?;
@@ -88,7 +97,7 @@ impl ProjectDb {
         let mut best_specificity = 0usize;
 
         for cat in &categories {
-            if cat.matches(rel_path) {
+            if cat.matches(rel_path)? {
                 let specificity = cat.pattern.len();
                 if specificity > best_specificity {
                     best = Some(cat);
@@ -126,7 +135,10 @@ impl ProjectDb {
         match rows.next() {
             Some(row) => {
                 let s = row?;
-                Ok(Some(s.parse().unwrap_or(ProtectionLevel::Editable)))
+                let level = s.parse().map_err(|e| {
+                    anyhow::anyhow!("invalid protection level '{s}' in category_policy: {e}")
+                })?;
+                Ok(Some(level))
             }
             None => Ok(None),
         }
@@ -136,7 +148,7 @@ impl ProjectDb {
         let categories = self.list_categories()?;
         let mut levels = Vec::new();
         for cat in &categories {
-            if cat.matches(rel_path) {
+            if cat.matches(rel_path)? {
                 if let Some(id) = cat.id {
                     if let Some(level) = self.get_policy_for_category(id)? {
                         levels.push(level);
@@ -267,8 +279,7 @@ impl ProjectDb {
             let mut stmt = self.conn.prepare(&sql)?;
             let matching_ids: std::collections::HashSet<i64> = stmt
                 .query_map(&*values.as_params(), |row| row.get::<_, i64>(0))?
-                .filter_map(Result::ok)
-                .collect();
+                .collect::<Result<_, _>>()?;
             candidates.retain(|f| f.id.is_some_and(|id| matching_ids.contains(&id)));
         }
 

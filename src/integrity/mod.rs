@@ -66,11 +66,15 @@ pub fn is_immutable(path: &Path) -> Result<bool> {
         .with_context(|| format!("failed to run lsattr on {}", path.display()))?;
 
     if !output.status.success() {
-        return Ok(false);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("lsattr failed on {}: {}", path.display(), stderr.trim());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let attrs = stdout.split_whitespace().next().unwrap_or("");
+    let attrs = stdout
+        .split_whitespace()
+        .next()
+        .with_context(|| format!("unexpected lsattr output for {}", path.display()))?;
     Ok(attrs.contains('i'))
 }
 

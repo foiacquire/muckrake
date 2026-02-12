@@ -80,7 +80,7 @@ fn verify_files(project_root: &Path, files: &[TrackedFile]) -> Result<VerifyCoun
             VerifyResult::Missing => counts.missing += 1,
         }
 
-        check_immutable_flag(file, &file_path);
+        check_immutable_flag(file, &file_path)?;
     }
 
     Ok(counts)
@@ -106,11 +106,11 @@ fn print_verify_result(result: &VerifyResult, path: &str) {
     }
 }
 
-fn check_immutable_flag(file: &TrackedFile, file_path: &Path) {
+fn check_immutable_flag(file: &TrackedFile, file_path: &Path) -> Result<()> {
     if !file.immutable {
-        return;
+        return Ok(());
     }
-    let actually_immutable = integrity::is_immutable(file_path).unwrap_or(false);
+    let actually_immutable = integrity::is_immutable(file_path)?;
     if !actually_immutable && file_path.exists() {
         eprintln!(
             "  {} {} immutable flag removed",
@@ -118,4 +118,5 @@ fn check_immutable_flag(file: &TrackedFile, file_path: &Path) {
             file.path
         );
     }
+    Ok(())
 }

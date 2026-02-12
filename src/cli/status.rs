@@ -41,7 +41,7 @@ pub fn run(cwd: &Path) -> Result<()> {
 
             if let Some(inbox_dir) = workspace_db.get_config("inbox_dir")? {
                 let inbox_path = workspace_root.join(&inbox_dir);
-                let inbox_count = count_inbox_files(&inbox_path);
+                let inbox_count = count_inbox_files(&inbox_path)?;
                 eprintln!("  Inbox: {inbox_count} files");
             }
         }
@@ -74,16 +74,16 @@ fn print_project_stats(db: &ProjectDb) -> Result<()> {
     Ok(())
 }
 
-fn count_inbox_files(inbox_path: &Path) -> usize {
+fn count_inbox_files(inbox_path: &Path) -> Result<usize> {
     if !inbox_path.exists() {
-        return 0;
+        return Ok(0);
     }
-    std::fs::read_dir(inbox_path)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|e| e.path().is_file())
-                .count()
-        })
-        .unwrap_or(0)
+    let mut count = 0;
+    for entry in std::fs::read_dir(inbox_path)? {
+        let entry = entry?;
+        if entry.path().is_file() {
+            count += 1;
+        }
+    }
+    Ok(count)
 }

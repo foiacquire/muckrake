@@ -43,10 +43,8 @@ pub struct Category {
 }
 
 impl Category {
-    pub fn matches(&self, path: &str) -> bool {
-        glob::Pattern::new(&self.pattern)
-            .map(|p| p.matches(path))
-            .unwrap_or(false)
+    pub fn matches(&self, path: &str) -> Result<bool, glob::PatternError> {
+        glob::Pattern::new(&self.pattern).map(|p| p.matches(path))
     }
 }
 
@@ -85,9 +83,9 @@ mod tests {
             category_type: CategoryType::Files,
             description: None,
         };
-        assert!(cat.matches("evidence/doc.pdf"));
-        assert!(cat.matches("evidence/financial/receipt.pdf"));
-        assert!(!cat.matches("notes/todo.md"));
+        assert!(cat.matches("evidence/doc.pdf").unwrap());
+        assert!(cat.matches("evidence/financial/receipt.pdf").unwrap());
+        assert!(!cat.matches("notes/todo.md").unwrap());
     }
 
     #[test]
@@ -98,7 +96,7 @@ mod tests {
             category_type: CategoryType::Files,
             description: None,
         };
-        assert!(cat.matches("notes/daily.md"));
-        assert!(!cat.matches("evidence/file.pdf"));
+        assert!(cat.matches("notes/daily.md").unwrap());
+        assert!(!cat.matches("evidence/file.pdf").unwrap());
     }
 }

@@ -59,7 +59,7 @@ pub fn run_init_project(
 }
 
 fn resolve_project_dir(cwd: &Path, name: Option<&str>) -> Result<PathBuf> {
-    let workspace = find_workspace(cwd);
+    let workspace = find_workspace(cwd)?;
 
     match (name, workspace) {
         (Some(name), Some((ws_root, ws_db))) => {
@@ -76,20 +76,19 @@ fn resolve_project_dir(cwd: &Path, name: Option<&str>) -> Result<PathBuf> {
     }
 }
 
-fn find_workspace(cwd: &Path) -> Option<(PathBuf, WorkspaceDb)> {
+fn find_workspace(cwd: &Path) -> Result<Option<(PathBuf, WorkspaceDb)>> {
     let mut dir = cwd.to_path_buf();
     loop {
         let mksp = dir.join(".mksp");
         if mksp.exists() {
-            if let Ok(ws_db) = WorkspaceDb::open(&mksp) {
-                return Some((dir, ws_db));
-            }
+            let ws_db = WorkspaceDb::open(&mksp)?;
+            return Ok(Some((dir, ws_db)));
         }
         if !dir.pop() {
             break;
         }
     }
-    None
+    Ok(None)
 }
 
 fn resolve_categories_with_policies(

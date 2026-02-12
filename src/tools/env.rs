@@ -7,7 +7,8 @@ const DEFAULT_PROXY: &str = "socks5h://127.0.0.1:9050";
 pub fn build_tool_env(
     env_overrides: Option<&str>,
     command_name: &str,
-) -> HashMap<String, Option<String>> {
+    quiet: bool,
+) -> anyhow::Result<HashMap<String, Option<String>>> {
     let mut env: HashMap<String, Option<String>> = HashMap::new();
     env.insert("ALL_PROXY".to_string(), Some(DEFAULT_PROXY.to_string()));
     env.insert("HTTPS_PROXY".to_string(), Some(DEFAULT_PROXY.to_string()));
@@ -16,27 +17,28 @@ pub fn build_tool_env(
     let mut privacy_removed = false;
 
     if let Some(overrides_json) = env_overrides {
-        if let Ok(overrides) =
-            serde_json::from_str::<HashMap<String, serde_json::Value>>(overrides_json)
-        {
-            for (key, value) in overrides {
-                if value.is_null() {
-                    env.insert(key.clone(), None);
-                    if is_proxy_var(&key) {
-                        privacy_removed = true;
-                    }
-                } else if let Some(s) = value.as_str() {
-                    if is_proxy_var(&key) && s != DEFAULT_PROXY {
-                        privacy_removed = true;
-                    }
-                    env.insert(key, Some(s.to_string()));
+        let overrides: HashMap<String, serde_json::Value> = serde_json::from_str(overrides_json)
+            .map_err(|e| anyhow::anyhow!("invalid env JSON for tool '{command_name}': {e}"))?;
+        for (key, value) in overrides {
+            if value.is_null() {
+                env.insert(key.clone(), None);
+                if is_proxy_var(&key) {
+                    privacy_removed = true;
                 }
+            } else if let Some(s) = value.as_str() {
+                if is_proxy_var(&key) && s != DEFAULT_PROXY {
+                    privacy_removed = true;
+                }
+                env.insert(key, Some(s.to_string()));
             }
         }
     }
 
-    print_privacy_notice(command_name, privacy_removed);
-    env
+    if !quiet {
+        print_privacy_notice(command_name, privacy_removed);
+    }
+
+    Ok(env)
 }
 
 fn is_proxy_var(key: &str) -> bool {

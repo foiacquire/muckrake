@@ -156,7 +156,16 @@ impl WorkspaceDb {
             Ok(Category {
                 id: Some(row.get(0)?),
                 pattern: row.get(1)?,
-                category_type: row.get::<_, String>(2)?.parse().unwrap_or_default(),
+                category_type: row.get::<_, String>(2)?.parse().map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("{e}"),
+                        )),
+                    )
+                })?,
                 description: row.get(3)?,
             })
         })?;
@@ -199,7 +208,12 @@ impl WorkspaceDb {
         match rows.next() {
             Some(row) => {
                 let s = row?;
-                Ok(Some(s.parse().unwrap_or(ProtectionLevel::Editable)))
+                let level = s.parse().map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid protection level '{s}' in default_category_policy: {e}"
+                    )
+                })?;
+                Ok(Some(level))
             }
             None => Ok(None),
         }
@@ -211,10 +225,12 @@ impl WorkspaceDb {
         let cats = self.list_default_categories()?;
         let mut result = Vec::with_capacity(cats.len());
         for cat in cats {
-            let level = cat
-                .id
-                .and_then(|id| self.get_default_category_policy(id).ok().flatten())
-                .unwrap_or(ProtectionLevel::Editable);
+            let level = match cat.id {
+                Some(id) => self
+                    .get_default_category_policy(id)?
+                    .unwrap_or(ProtectionLevel::Editable),
+                None => ProtectionLevel::Editable,
+            };
             result.push((cat, level));
         }
         Ok(result)
