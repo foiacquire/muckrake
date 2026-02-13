@@ -198,6 +198,9 @@ fn register_in_workspace(project_dir: &Path) -> Result<()> {
                 |n| n.to_string_lossy().to_string(),
             );
             validate_name(&name)?;
+            if ws_db.get_project_by_name(&name)?.is_some() {
+                bail!("project '{name}' already exists in workspace");
+            }
             ws_db.register_project(&name, &rel_path, None)?;
             eprintln!("  Registered in workspace at {}", d.display());
             return Ok(());

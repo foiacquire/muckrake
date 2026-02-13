@@ -308,6 +308,16 @@ impl ProjectDb {
         Ok(())
     }
 
+    pub fn update_file_sha256(&self, file_id: i64, sha256: &str) -> Result<()> {
+        let (sql, values) = Query::update()
+            .table(Files::Table)
+            .value(Files::Sha256, sha256)
+            .and_where(Expr::col(Files::Id).eq(file_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(())
+    }
+
     pub fn insert_tag(&self, file_id: i64, tag: &str, file_hash: &str) -> Result<()> {
         let (sql, values) = Query::insert()
             .into_table(FileTags::Table)
@@ -323,14 +333,14 @@ impl ProjectDb {
         Ok(())
     }
 
-    pub fn remove_tag(&self, file_id: i64, tag: &str) -> Result<()> {
+    pub fn remove_tag(&self, file_id: i64, tag: &str) -> Result<usize> {
         let (sql, values) = Query::delete()
             .from_table(FileTags::Table)
             .and_where(Expr::col(FileTags::FileId).eq(file_id))
             .and_where(Expr::col(FileTags::Tag).eq(tag))
             .build_rusqlite(SqliteQueryBuilder);
-        self.conn.execute(&sql, &*values.as_params())?;
-        Ok(())
+        let count = self.conn.execute(&sql, &*values.as_params())?;
+        Ok(count)
     }
 
     pub fn get_tags(&self, file_id: i64) -> Result<Vec<String>> {

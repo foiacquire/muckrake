@@ -44,10 +44,6 @@ fn parse_tool_ref(input: &str) -> Result<ToolRef> {
 }
 
 pub fn run(cwd: &Path, args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        bail!("tool name required: mkrk tool <name> [references...]");
-    }
-
     let tool_ref = parse_tool_ref(&args[0])?;
     let raw_refs = &args[1..];
 

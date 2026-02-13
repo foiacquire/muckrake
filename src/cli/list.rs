@@ -27,7 +27,7 @@ pub fn run(cwd: &Path, raw_refs: &[String]) -> Result<()> {
     let collection = resolve_references(&refs, &ctx)?;
 
     if collection.files.is_empty() {
-        eprintln!("  (no files)");
+        eprintln!("(no files)");
         return Ok(());
     }
 
@@ -50,7 +50,7 @@ pub fn run(cwd: &Path, raw_refs: &[String]) -> Result<()> {
         for rf in &collection.files {
             if last_project != Some(&rf.project_name) {
                 if let Some(ref name) = rf.project_name {
-                    eprintln!("{}:", style(name).bold());
+                    println!("{}:", style(name).bold());
                 }
                 last_project = Some(&rf.project_name);
             }
@@ -58,7 +58,7 @@ pub fn run(cwd: &Path, raw_refs: &[String]) -> Result<()> {
         }
     } else {
         if let Some(Some(ref name)) = collection.files.first().map(|f| &f.project_name) {
-            eprintln!("{}:", style(name).bold());
+            println!("{}:", style(name).bold());
         }
         for rf in &collection.files {
             print_file(&rf.file);
@@ -71,7 +71,7 @@ pub fn run(cwd: &Path, raw_refs: &[String]) -> Result<()> {
 fn print_file(f: &TrackedFile) {
     let protection = if f.immutable { "immutable" } else { "editable" };
     let size = f.size.map_or_else(|| "?".to_string(), format_size);
-    eprintln!(
+    println!(
         "  {} {} [{}] {}",
         style(&f.name).bold(),
         style(&f.path).dim(),

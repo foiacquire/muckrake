@@ -25,6 +25,11 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
 
     let file_name = &file.name;
     let new_rel_path = format!("{category}/{file_name}");
+
+    if project_db.match_category(&new_rel_path)?.is_none() {
+        bail!("no category matches '{category}' — use 'mkrk list' to see registered categories");
+    }
+
     let old_path = project_root.join(&file.path);
     let new_path = project_root.join(&new_rel_path);
 

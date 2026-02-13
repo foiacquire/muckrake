@@ -26,7 +26,7 @@ pub fn run(cwd: &Path) -> Result<()> {
 
     for proj in &projects {
         let desc = proj.description.as_deref().unwrap_or("");
-        eprintln!(
+        println!(
             "  {} {} {}",
             style(&proj.name).bold(),
             style(&proj.path).dim(),

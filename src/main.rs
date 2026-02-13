@@ -15,6 +15,14 @@ fn main() -> Result<()> {
 
     let raw_args: Vec<String> = env::args().collect();
     let (scope, filtered_args) = extract_scope(raw_args);
+
+    if scope.is_some() && filtered_args.len() == 1 {
+        bail!(
+            "scope prefix requires a subcommand (e.g., mkrk :{} list)",
+            scope.as_deref().unwrap_or("")
+        );
+    }
+
     let cli = Cli::parse_from(&filtered_args);
 
     let real_cwd = env::current_dir()?;
@@ -48,9 +56,7 @@ fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
             &categories,
         ),
         Commands::Status => muckrake::cli::status::run(cwd),
-        Commands::Ingest { paths, category } => {
-            muckrake::cli::ingest::run(cwd, &paths, category.as_deref())
-        }
+        Commands::Ingest { scope } => muckrake::cli::ingest::run(cwd, scope.as_deref()),
         Commands::List { references } => muckrake::cli::list::run(cwd, &references),
         Commands::View { reference } => muckrake::cli::view::run_view(cwd, &reference),
         Commands::Edit { reference } => muckrake::cli::view::run_edit(cwd, &reference),
@@ -89,6 +95,9 @@ fn dispatch_init(
 ) -> Result<()> {
     if name.is_some() && workspace.is_some() {
         bail!("cannot specify project name with --workspace");
+    }
+    if !categories.is_empty() && workspace.is_some() {
+        bail!("--category is not supported with --workspace");
     }
     workspace.map_or_else(
         || {

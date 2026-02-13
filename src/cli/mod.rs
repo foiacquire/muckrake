@@ -28,7 +28,7 @@ pub struct Cli {
 pub enum Commands {
     /// Create a new project or workspace
     Init {
-        /// Project name (creates directory; required in workspaces)
+        /// Project name (creates directory; required inside a workspace)
         name: Option<String>,
         /// Create a workspace instead of a project; value is the projects directory
         #[arg(short = 'w', long = "workspace")]
@@ -39,19 +39,16 @@ pub enum Commands {
         /// Don't create default categories
         #[arg(short = 'n', long = "no-categories")]
         no_categories: bool,
-        /// Define custom categories (pattern:level), implies --no-categories
+        /// Define custom categories (pattern:level or pattern:type:level), implies --no-categories
         #[arg(long = "category")]
         categories: Vec<String>,
     },
     /// Show current context and project status
     Status,
-    /// Import files with integrity tracking
+    /// Track untracked files in the project (scans filesystem)
     Ingest {
-        /// File path(s) to ingest
-        paths: Vec<String>,
-        /// Target category path (e.g., evidence/financial)
-        #[arg(long = "as")]
-        category: Option<String>,
+        /// Scope to scan (e.g., evidence, evidence.emails); omit to scan entire project
+        scope: Option<String>,
     },
     /// List files in the current scope
     List {
@@ -102,7 +99,7 @@ pub enum Commands {
         #[arg(long)]
         no_hash_check: bool,
     },
-    /// Workspace inbox operations
+    /// Workspace inbox operations (lists inbox when run without subcommand)
     Inbox {
         #[command(subcommand)]
         command: Option<InboxCommands>,
