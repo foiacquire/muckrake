@@ -1,4 +1,5 @@
 pub mod categorize;
+pub mod category;
 pub mod inbox;
 pub mod ingest;
 pub mod init;
@@ -24,7 +25,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum Commands {
     /// Create a new project or workspace
     Init {
@@ -112,9 +113,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: ToolCommands,
     },
+    /// Manage project categories
+    #[command(alias = "cat")]
+    Category {
+        #[command(subcommand)]
+        command: Option<CategoryCommands>,
+    },
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum ToolCommands {
     /// Register a tool in the database
     Add {
@@ -159,7 +166,41 @@ pub enum ToolCommands {
     Run(Vec<String>),
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
+pub enum CategoryCommands {
+    /// Add a new category
+    Add {
+        /// Pattern (e.g., evidence/**)
+        pattern: String,
+        /// Category type
+        #[arg(long = "type", default_value = "files")]
+        category_type: String,
+        /// Protection level
+        #[arg(long, default_value = "editable")]
+        protection: String,
+        /// Description
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Update an existing category
+    Update {
+        /// Current pattern to match
+        current: String,
+        /// New pattern
+        #[arg(long)]
+        pattern: Option<String>,
+        /// New protection level
+        #[arg(long)]
+        protection: Option<String>,
+    },
+    /// Remove a category
+    Remove {
+        /// Pattern to remove
+        pattern: String,
+    },
+}
+
+#[derive(Clone, Subcommand)]
 pub enum InboxCommands {
     /// Assign an inbox file to a project
     Assign {

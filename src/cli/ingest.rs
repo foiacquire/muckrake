@@ -3,59 +3,27 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 use chrono::Utc;
 
-use crate::context::{discover, Context};
-use crate::db::ProjectDb;
+use crate::context::discover;
 use crate::integrity;
 use crate::models::{ProtectionLevel, TrackedFile};
 use crate::util::whoami;
 
 pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
+    let (project_root, project_db) = ctx.require_project()?;
 
-    match &ctx {
-        Context::Project {
-            project_root,
-            project_db,
-            ..
-        } => {
-            let scan_dir = resolve_scan_dir(project_root, scope)?;
-            if !scan_dir.exists() {
-                bail!("directory not found: {}", scan_dir.display());
-            }
-            let count = ingest_directory(project_root, project_db, &scan_dir)?;
-            if count == 0 {
-                eprintln!("No new files to ingest");
-            } else {
-                eprintln!("Ingested {count} file(s)");
-            }
-        }
-        Context::Workspace {
-            workspace_root,
-            workspace_db,
-        } => {
-            let mut total = 0;
-            for proj in workspace_db.list_projects()? {
-                let proj_root = workspace_root.join(&proj.path);
-                let proj_mkrk = proj_root.join(".mkrk");
-                if !proj_mkrk.exists() {
-                    continue;
-                }
-                let proj_db = ProjectDb::open(&proj_mkrk)?;
-                let scan_dir = resolve_scan_dir(&proj_root, scope)?;
-                if !scan_dir.exists() {
-                    continue;
-                }
-                let count = ingest_directory(&proj_root, &proj_db, &scan_dir)?;
-                if count > 0 {
-                    eprintln!("  {}: {count} file(s)", proj.name);
-                    total += count;
-                }
-            }
-            if total == 0 {
-                eprintln!("No new files to ingest");
-            }
-        }
-        Context::None => bail!("not in a muckrake project or workspace"),
+    let scan_dir = resolve_scan_dir(project_root, scope)?;
+    if !scan_dir.exists() {
+        bail!("directory not found: {}", scan_dir.display());
+    }
+
+    let mut count = 0;
+    scan_recursive(&scan_dir, project_root, project_db, &mut count)?;
+
+    if count == 0 {
+        eprintln!("No new files to ingest");
+    } else {
+        eprintln!("Ingested {count} file(s)");
     }
 
     Ok(())
@@ -65,7 +33,9 @@ fn resolve_scan_dir(project_root: &Path, scope: Option<&str>) -> Result<PathBuf>
     match scope {
         Some(s) => {
             if s.starts_with(':') {
-                bail!("ingest scans the current project — cross-project references are not supported");
+                bail!(
+                    "ingest scans the current project — cross-project references are not supported"
+                );
             }
             Ok(project_root.join(s.replace('.', "/")))
         }
@@ -73,16 +43,10 @@ fn resolve_scan_dir(project_root: &Path, scope: Option<&str>) -> Result<PathBuf>
     }
 }
 
-fn ingest_directory(project_root: &Path, db: &ProjectDb, scan_dir: &Path) -> Result<usize> {
-    let mut count = 0;
-    scan_recursive(scan_dir, project_root, db, &mut count)?;
-    Ok(count)
-}
-
 fn scan_recursive(
     dir: &Path,
     project_root: &Path,
-    db: &ProjectDb,
+    db: &crate::db::ProjectDb,
     count: &mut usize,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
@@ -116,7 +80,7 @@ fn scan_recursive(
 /// Track a file that already exists on disk inside the project.
 pub fn track_file(
     project_root: &Path,
-    db: &ProjectDb,
+    db: &crate::db::ProjectDb,
     abs_path: &Path,
     rel_path: &str,
 ) -> Result<i64> {
