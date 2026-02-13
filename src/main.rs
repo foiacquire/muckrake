@@ -47,10 +47,7 @@ fn main() -> Result<()> {
 /// When in workspace context, iterate all projects and dispatch the command
 /// for each one. Returns `Some(result)` if workspace iteration was performed,
 /// `None` if we're not in workspace context.
-fn try_dispatch_workspace(
-    command: &Commands,
-    cwd: &Path,
-) -> Result<Option<Result<()>>> {
+fn try_dispatch_workspace(command: &Commands, cwd: &Path) -> Result<Option<Result<()>>> {
     let ctx = discover(cwd)?;
     let Context::Workspace {
         workspace_root,
@@ -133,9 +130,7 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
             category,
         } => muckrake::cli::categorize::run(cwd, &reference, &category),
         Commands::Tag { reference, tag } => muckrake::cli::tags::run_tag(cwd, &reference, &tag),
-        Commands::Untag { reference, tag } => {
-            muckrake::cli::tags::run_untag(cwd, &reference, &tag)
-        }
+        Commands::Untag { reference, tag } => muckrake::cli::tags::run_untag(cwd, &reference, &tag),
         Commands::Tags {
             reference,
             no_hash_check,
