@@ -93,6 +93,66 @@ impl ProjectDb {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn get_category_by_pattern(&self, pattern: &str) -> Result<Option<Category>> {
+        let (sql, values) = Query::select()
+            .columns([
+                Categories::Id,
+                Categories::Pattern,
+                Categories::CategoryType,
+                Categories::Description,
+            ])
+            .from(Categories::Table)
+            .and_where(Expr::col(Categories::Pattern).eq(pattern))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| {
+            Ok(Category {
+                id: Some(row.get(0)?),
+                pattern: row.get(1)?,
+                category_type: row.get::<_, String>(2)?.parse().map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("{e}"),
+                        )),
+                    )
+                })?,
+                description: row.get(3)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn update_category_pattern(&self, category_id: i64, new_pattern: &str) -> Result<()> {
+        let (sql, values) = Query::update()
+            .table(Categories::Table)
+            .value(Categories::Pattern, new_pattern)
+            .and_where(Expr::col(Categories::Id).eq(category_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(())
+    }
+
+    pub fn remove_category(&self, category_id: i64) -> Result<()> {
+        let (sql, values) = Query::delete()
+            .from_table(CategoryPolicy::Table)
+            .and_where(Expr::col(CategoryPolicy::CategoryId).eq(category_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+
+        let (sql, values) = Query::delete()
+            .from_table(Categories::Table)
+            .and_where(Expr::col(Categories::Id).eq(category_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(())
+    }
+
     pub fn match_category(&self, rel_path: &str) -> Result<Option<Category>> {
         let categories = self.list_categories()?;
         let mut best: Option<&Category> = None;
@@ -308,6 +368,16 @@ impl ProjectDb {
         Ok(())
     }
 
+    pub fn update_file_sha256(&self, file_id: i64, sha256: &str) -> Result<()> {
+        let (sql, values) = Query::update()
+            .table(Files::Table)
+            .value(Files::Sha256, sha256)
+            .and_where(Expr::col(Files::Id).eq(file_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(())
+    }
+
     pub fn insert_tag(&self, file_id: i64, tag: &str, file_hash: &str) -> Result<()> {
         let (sql, values) = Query::insert()
             .into_table(FileTags::Table)
@@ -323,14 +393,14 @@ impl ProjectDb {
         Ok(())
     }
 
-    pub fn remove_tag(&self, file_id: i64, tag: &str) -> Result<()> {
+    pub fn remove_tag(&self, file_id: i64, tag: &str) -> Result<usize> {
         let (sql, values) = Query::delete()
             .from_table(FileTags::Table)
             .and_where(Expr::col(FileTags::FileId).eq(file_id))
             .and_where(Expr::col(FileTags::Tag).eq(tag))
             .build_rusqlite(SqliteQueryBuilder);
-        self.conn.execute(&sql, &*values.as_params())?;
-        Ok(())
+        let count = self.conn.execute(&sql, &*values.as_params())?;
+        Ok(count)
     }
 
     pub fn get_tags(&self, file_id: i64) -> Result<Vec<String>> {

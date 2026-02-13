@@ -4,6 +4,7 @@ use std::process::Command;
 use anyhow::{bail, Result};
 
 use crate::context::discover;
+use crate::integrity;
 use crate::models::ProtectionLevel;
 use crate::reference::{parse_reference, resolve_references};
 use crate::tools;
@@ -61,11 +62,18 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
         }
     }
 
+    if !status.success() {
+        bail!("tool '{command_str}' exited with {status}");
+    }
+
     let user = whoami();
     project_db.insert_audit(action, file.id, Some(&user), None)?;
 
-    if !status.success() {
-        bail!("tool '{command_str}' exited with {status}");
+    if action == "edit" {
+        if let Some(file_id) = file.id {
+            let new_hash = integrity::hash_file(&file_path)?;
+            project_db.update_file_sha256(file_id, &new_hash)?;
+        }
     }
 
     Ok(())
@@ -126,6 +134,10 @@ fn resolve_open_path(
                 std::fs::remove_file(&temp_path)?;
             }
             std::fs::copy(file_path, &temp_path)?;
+
+            let mut perms = std::fs::metadata(&temp_path)?.permissions();
+            perms.set_readonly(true);
+            std::fs::set_permissions(&temp_path, perms)?;
 
             Ok((Some(temp_dir), temp_path))
         }

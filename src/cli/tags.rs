@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use console::style;
 
 use crate::context::{discover, Context};
@@ -42,7 +42,10 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let (_, project_db) = ctx.require_project()?;
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    project_db.remove_tag(file_id, tag)?;
+    let removed = project_db.remove_tag(file_id, tag)?;
+    if removed == 0 {
+        bail!("tag '{tag}' not found on '{}'", file.name);
+    }
     eprintln!("Removed tag '{tag}' from '{}'", file.name);
 
     Ok(())
@@ -65,14 +68,14 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
         if tags.is_empty() {
             eprintln!("No tags on '{}'", file.name);
         } else {
-            eprintln!("Tags on '{}':", file.name);
+            println!("Tags on '{}':", file.name);
             for tag in &tags {
                 let status = if no_hash_check {
                     String::new()
                 } else {
                     format_tag_status(project_db, project_root, file_id, tag, &file.path)
                 };
-                eprintln!("  {}{status}", style(tag).cyan());
+                println!("  {}{status}", style(tag).cyan());
             }
         }
     } else {
@@ -85,7 +88,7 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
                 by_tag.entry(ft.tag.clone()).or_default().push(ft.file_id);
             }
             for (tag, file_ids) in &by_tag {
-                eprintln!("  {} ({} files)", style(tag).cyan(), file_ids.len());
+                println!("  {} ({} files)", style(tag).cyan(), file_ids.len());
             }
         }
     }

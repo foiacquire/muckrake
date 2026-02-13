@@ -26,6 +26,9 @@ pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
         if collection.files.is_empty() {
             bail!("reference '{r}' matched no files");
         }
+        if collection.files.iter().any(|rf| rf.project_name.is_some()) {
+            bail!("verify does not support cross-project references");
+        }
         collection.files.into_iter().map(|rf| rf.file).collect()
     } else {
         project_db.list_files(None)?

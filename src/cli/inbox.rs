@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use console::style;
 
 use crate::context::{discover, Context, WorkspaceContext};
-use crate::db::WorkspaceDb;
+use crate::db::{ProjectDb, WorkspaceDb};
 use crate::util::format_size;
 
 pub fn run_list(cwd: &Path) -> Result<()> {
@@ -29,11 +29,11 @@ pub fn run_list(cwd: &Path) -> Result<()> {
         return Ok(());
     }
 
-    eprintln!("Inbox ({} files):", entries.len());
+    println!("Inbox ({} files):", entries.len());
     for entry in &entries {
         let name = entry.file_name().to_string_lossy().to_string();
         let size = format_size(entry.metadata()?.len() as i64);
-        eprintln!("  {} {}", style(&name).bold(), style(size).dim());
+        println!("  {} {}", style(&name).bold(), style(size).dim());
     }
 
     Ok(())
@@ -62,12 +62,22 @@ pub fn run_assign(cwd: &Path, file: &str, project: &str, category: Option<&str>)
         );
     }
 
-    let proj_cwd = proj_root;
-    crate::cli::ingest::run(
-        &proj_cwd,
-        &[file_path.to_string_lossy().to_string()],
-        category,
-    )?;
+    let dest_rel = match category {
+        Some(cat) => format!("{cat}/{file}"),
+        None => file.to_string(),
+    };
+    let dest_path = proj_root.join(&dest_rel);
+
+    if dest_path.exists() {
+        bail!("destination already exists: {}", dest_path.display());
+    }
+    if let Some(parent) = dest_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(&file_path, &dest_path)?;
+
+    let proj_db = ProjectDb::open(&proj_mkrk)?;
+    crate::cli::ingest::track_file(&proj_root, &proj_db, &dest_path, &dest_rel)?;
 
     std::fs::remove_file(&file_path)?;
     eprintln!("Removed {file} from inbox");

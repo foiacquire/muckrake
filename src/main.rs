@@ -1,11 +1,12 @@
 use std::env;
+use std::path::Path;
 
 use anyhow::{bail, Result};
 use clap::Parser;
 
 use muckrake::cli::scope::extract_scope;
-use muckrake::cli::{Cli, Commands, InboxCommands, ToolCommands};
-use muckrake::context::resolve_scope;
+use muckrake::cli::{CategoryCommands, Cli, Commands, InboxCommands, ToolCommands};
+use muckrake::context::{discover, resolve_scope, Context};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -15,23 +16,94 @@ fn main() -> Result<()> {
 
     let raw_args: Vec<String> = env::args().collect();
     let (scope, filtered_args) = extract_scope(raw_args);
-    let cli = Cli::parse_from(&filtered_args);
 
+    if scope.is_some() && filtered_args.len() == 1 {
+        bail!(
+            "scope prefix requires a subcommand (e.g., mkrk :{} list)",
+            scope.as_deref().unwrap_or("")
+        );
+    }
+
+    let cli = Cli::parse_from(&filtered_args);
     let real_cwd = env::current_dir()?;
 
-    let effective_cwd = if let Some(ref scope_name) = scope {
+    if let Some(ref scope_name) = scope {
         if matches!(cli.command, Commands::Init { .. }) {
             bail!("scope prefix cannot be used with 'init'");
         }
-        resolve_scope(&real_cwd, scope_name)?
-    } else {
-        real_cwd
-    };
+        let effective_cwd = resolve_scope(&real_cwd, scope_name)?;
+        return dispatch(cli.command, &effective_cwd);
+    }
 
-    dispatch(cli.command, &effective_cwd)
+    if should_iterate_projects(&cli.command) {
+        if let Some(result) = try_dispatch_workspace(&cli.command, &real_cwd)? {
+            return result;
+        }
+    }
+
+    dispatch(cli.command, &real_cwd)
 }
 
-fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
+/// When in workspace context, iterate all projects and dispatch the command
+/// for each one. Returns `Some(result)` if workspace iteration was performed,
+/// `None` if we're not in workspace context.
+fn try_dispatch_workspace(command: &Commands, cwd: &Path) -> Result<Option<Result<()>>> {
+    let ctx = discover(cwd)?;
+    let Context::Workspace {
+        workspace_root,
+        workspace_db,
+    } = ctx
+    else {
+        return Ok(None);
+    };
+
+    let projects = workspace_db.list_projects()?;
+    if projects.is_empty() {
+        bail!("no projects in workspace");
+    }
+
+    let mut attempted = 0;
+    let mut succeeded = 0;
+    for proj in &projects {
+        let proj_root = workspace_root.join(&proj.path);
+        if !proj_root.join(".mkrk").exists() {
+            continue;
+        }
+        attempted += 1;
+        eprintln!("{}:", proj.name);
+        match dispatch(command.clone(), &proj_root) {
+            Ok(()) => succeeded += 1,
+            Err(e) => eprintln!("  {e}"),
+        }
+    }
+    if attempted > 0 && succeeded == 0 {
+        return Ok(Some(Err(anyhow::anyhow!(
+            "command failed for all projects"
+        ))));
+    }
+    Ok(Some(Ok(())))
+}
+
+/// Whether this command should automatically iterate over all workspace
+/// projects when run in workspace context without a scope prefix.
+const fn should_iterate_projects(command: &Commands) -> bool {
+    match command {
+        Commands::Ingest { .. }
+        | Commands::Category { .. }
+        | Commands::Verify { reference: None }
+        | Commands::Tags {
+            reference: None, ..
+        } => true,
+        Commands::List { references } => references.is_empty(),
+        Commands::Tool { command } => matches!(
+            command,
+            ToolCommands::Add { .. } | ToolCommands::Remove { .. }
+        ),
+        _ => false,
+    }
+}
+
+fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
     match command {
         Commands::Init {
             name,
@@ -48,9 +120,7 @@ fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
             &categories,
         ),
         Commands::Status => muckrake::cli::status::run(cwd),
-        Commands::Ingest { paths, category } => {
-            muckrake::cli::ingest::run(cwd, &paths, category.as_deref())
-        }
+        Commands::Ingest { scope } => muckrake::cli::ingest::run(cwd, scope.as_deref()),
         Commands::List { references } => muckrake::cli::list::run(cwd, &references),
         Commands::View { reference } => muckrake::cli::view::run_view(cwd, &reference),
         Commands::Edit { reference } => muckrake::cli::view::run_edit(cwd, &reference),
@@ -75,12 +145,13 @@ fn dispatch(command: Commands, cwd: &std::path::Path) -> Result<()> {
         },
         Commands::Projects => muckrake::cli::projects::run(cwd),
         Commands::Tool { command } => dispatch_tool(cwd, command),
+        Commands::Category { command } => dispatch_category(cwd, command),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_init(
-    cwd: &std::path::Path,
+    cwd: &Path,
     name: Option<&str>,
     workspace: Option<String>,
     inbox: bool,
@@ -89,6 +160,9 @@ fn dispatch_init(
 ) -> Result<()> {
     if name.is_some() && workspace.is_some() {
         bail!("cannot specify project name with --workspace");
+    }
+    if !categories.is_empty() && workspace.is_some() {
+        bail!("--category is not supported with --workspace");
     }
     workspace.map_or_else(
         || {
@@ -105,7 +179,7 @@ fn dispatch_init(
     )
 }
 
-fn dispatch_tool(cwd: &std::path::Path, command: ToolCommands) -> Result<()> {
+fn dispatch_tool(cwd: &Path, command: ToolCommands) -> Result<()> {
     match command {
         ToolCommands::Add {
             name,
@@ -141,5 +215,36 @@ fn dispatch_tool(cwd: &std::path::Path, command: ToolCommands) -> Result<()> {
             tag.as_deref(),
         ),
         ToolCommands::Run(args) => muckrake::cli::tool::run(cwd, &args),
+    }
+}
+
+fn dispatch_category(cwd: &Path, command: Option<CategoryCommands>) -> Result<()> {
+    match command {
+        None => muckrake::cli::category::run_list(cwd),
+        Some(CategoryCommands::Add {
+            pattern,
+            category_type,
+            protection,
+            description,
+        }) => muckrake::cli::category::run_add(
+            cwd,
+            &pattern,
+            &category_type,
+            &protection,
+            description.as_deref(),
+        ),
+        Some(CategoryCommands::Update {
+            current,
+            pattern,
+            protection,
+        }) => muckrake::cli::category::run_update(
+            cwd,
+            &current,
+            pattern.as_deref(),
+            protection.as_deref(),
+        ),
+        Some(CategoryCommands::Remove { pattern }) => {
+            muckrake::cli::category::run_remove(cwd, &pattern)
+        }
     }
 }
