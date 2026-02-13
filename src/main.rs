@@ -15,7 +15,7 @@ fn main() -> Result<()> {
         .init();
 
     let raw_args: Vec<String> = env::args().collect();
-    let (scope, filtered_args) = extract_scope(raw_args);
+    let (scope, mut filtered_args) = extract_scope(raw_args);
 
     if scope.is_some() && filtered_args.len() == 1 {
         bail!(
@@ -24,6 +24,7 @@ fn main() -> Result<()> {
         );
     }
 
+    rewrite_category_shorthand(&mut filtered_args);
     let cli = Cli::parse_from(&filtered_args);
     let real_cwd = env::current_dir()?;
 
@@ -101,6 +102,26 @@ const fn should_iterate_projects(command: &Commands) -> bool {
         ),
         _ => false,
     }
+}
+
+/// Rewrite `mkrk category <pattern> ...` → `mkrk category update <pattern> ...`
+/// when <pattern> isn't a known subcommand. Allows the user to skip typing `update`.
+fn rewrite_category_shorthand(args: &mut Vec<String>) {
+    let Some(cat_pos) = args.iter().position(|a| a == "category" || a == "cat") else {
+        return;
+    };
+    let next_pos = cat_pos + 1;
+    if next_pos >= args.len() {
+        return;
+    }
+    let next = &args[next_pos];
+    if matches!(
+        next.as_str(),
+        "add" | "update" | "remove" | "help" | "--help" | "-h"
+    ) {
+        return;
+    }
+    args.insert(next_pos, "update".to_string());
 }
 
 fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
