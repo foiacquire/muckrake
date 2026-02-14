@@ -4,7 +4,17 @@ use anyhow::{bail, Result};
 use console::style;
 
 use crate::context::discover;
+use crate::db::ProjectDb;
 use crate::models::{Category, CategoryType, ProtectionLevel};
+use crate::reference::validate_name;
+
+/// Resolve a category by name first, then fall back to pattern match.
+fn find_category(db: &ProjectDb, input: &str) -> Result<Option<Category>> {
+    if let Some(cat) = db.get_category_by_name(input)? {
+        return Ok(Some(cat));
+    }
+    db.get_category_by_pattern(input)
+}
 
 pub fn run_list(cwd: &Path) -> Result<()> {
     let ctx = discover(cwd)?;
@@ -29,8 +39,9 @@ pub fn run_list(cwd: &Path) -> Result<()> {
         };
 
         println!(
-            "  {} {}{}",
-            style(&cat.pattern).bold(),
+            "  {} {} {}{}",
+            style(&cat.name).bold(),
+            style(&cat.pattern).dim(),
             style(protection).dim(),
             type_label
         );
@@ -43,49 +54,57 @@ pub fn run_list(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run_add(
-    cwd: &Path,
-    pattern: &str,
-    category_type: &str,
-    protection: &str,
-    description: Option<&str>,
-) -> Result<()> {
+pub struct AddCategoryParams<'a> {
+    pub name: &'a str,
+    pub pattern: Option<&'a str>,
+    pub category_type: &'a str,
+    pub protection: &'a str,
+    pub description: Option<&'a str>,
+}
+
+pub fn run_add(cwd: &Path, params: &AddCategoryParams<'_>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
 
-    if project_db.get_category_by_pattern(pattern)?.is_some() {
-        bail!("category '{pattern}' already exists");
+    let name = params.name;
+    validate_name(name)?;
+
+    if project_db.get_category_by_name(name)?.is_some() {
+        bail!("category '{name}' already exists");
     }
 
-    let cat_type: CategoryType = category_type.parse()?;
-    let level: ProtectionLevel = protection.parse()?;
+    let resolved_pattern =
+        params.pattern.map_or_else(|| format!("{name}/**"), String::from);
+
+    let cat_type: CategoryType = params.category_type.parse()?;
+    let level: ProtectionLevel = params.protection.parse()?;
 
     let cat = Category {
         id: None,
-        pattern: pattern.to_string(),
+        name: name.to_string(),
+        pattern: resolved_pattern,
         category_type: cat_type,
-        description: description.map(String::from),
+        description: params.description.map(String::from),
     };
 
     let cat_id = project_db.insert_category(&cat)?;
     project_db.insert_category_policy(cat_id, &level)?;
 
-    eprintln!("Added category '{pattern}' ({level})");
+    eprintln!("Added category '{}' ({level})", cat.name);
     Ok(())
 }
 
 pub fn run_update(
     cwd: &Path,
-    pattern: &str,
+    name: &str,
     new_pattern: Option<&str>,
     protection: Option<&str>,
 ) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
 
-    let cat = project_db
-        .get_category_by_pattern(pattern)?
-        .ok_or_else(|| anyhow::anyhow!("no category with pattern '{pattern}'"))?;
+    let cat = find_category(project_db, name)?
+        .ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
     let cat_id = cat
         .id
         .ok_or_else(|| anyhow::anyhow!("category has no id"))?;
@@ -95,11 +114,8 @@ pub fn run_update(
     }
 
     if let Some(p) = new_pattern {
-        if project_db.get_category_by_pattern(p)?.is_some() {
-            bail!("category '{p}' already exists");
-        }
         project_db.update_category_pattern(cat_id, p)?;
-        eprintln!("Updated pattern: {pattern} -> {p}");
+        eprintln!("Updated pattern: {} -> {p}", cat.pattern);
     }
 
     if let Some(level_str) = protection {
@@ -111,19 +127,18 @@ pub fn run_update(
     Ok(())
 }
 
-pub fn run_remove(cwd: &Path, pattern: &str) -> Result<()> {
+pub fn run_remove(cwd: &Path, name: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
 
-    let cat = project_db
-        .get_category_by_pattern(pattern)?
-        .ok_or_else(|| anyhow::anyhow!("no category with pattern '{pattern}'"))?;
+    let cat = find_category(project_db, name)?
+        .ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
     let cat_id = cat
         .id
         .ok_or_else(|| anyhow::anyhow!("category has no id"))?;
 
     project_db.remove_category(cat_id)?;
-    eprintln!("Removed category '{pattern}'");
+    eprintln!("Removed category '{}'", cat.name);
 
     Ok(())
 }

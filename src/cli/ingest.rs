@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::Utc;
 
 use crate::context::discover;
@@ -12,13 +12,10 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
-    let scan_dir = resolve_scan_dir(project_root, scope)?;
-    if !scan_dir.exists() {
-        bail!("directory not found: {}", scan_dir.display());
-    }
+    let patterns = resolve_patterns(project_db, scope)?;
 
     let mut count = 0;
-    scan_recursive(&scan_dir, project_root, project_db, &mut count)?;
+    scan_matching(project_root, project_db, &patterns, &mut count)?;
 
     if count == 0 {
         eprintln!("No new files to ingest");
@@ -29,24 +26,39 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_scan_dir(project_root: &Path, scope: Option<&str>) -> Result<PathBuf> {
-    match scope {
-        Some(s) => {
-            if s.starts_with(':') {
-                bail!(
-                    "ingest scans the current project — cross-project references are not supported"
-                );
-            }
-            Ok(project_root.join(s.replace('.', "/")))
-        }
-        None => Ok(project_root.to_path_buf()),
-    }
+fn resolve_patterns(
+    db: &crate::db::ProjectDb,
+    scope: Option<&str>,
+) -> Result<Vec<glob::Pattern>> {
+    let Some(name) = scope else {
+        return Ok(vec![glob::Pattern::new("**")?]);
+    };
+
+    let cat = db
+        .get_category_by_name(name)?
+        .ok_or_else(|| anyhow::anyhow!("no category named '{name}'"))?;
+
+    let base = crate::models::Category::name_from_pattern(&cat.pattern);
+    Ok(vec![
+        glob::Pattern::new(&format!("{base}/*"))?,
+        glob::Pattern::new(&format!("{base}/**/*"))?,
+    ])
 }
 
-fn scan_recursive(
+fn scan_matching(
+    project_root: &Path,
+    db: &crate::db::ProjectDb,
+    patterns: &[glob::Pattern],
+    count: &mut usize,
+) -> Result<()> {
+    walk_dir(project_root, project_root, db, patterns, count)
+}
+
+fn walk_dir(
     dir: &Path,
     project_root: &Path,
     db: &crate::db::ProjectDb,
+    patterns: &[glob::Pattern],
     count: &mut usize,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
@@ -59,12 +71,16 @@ fn scan_recursive(
         }
 
         if path.is_dir() {
-            scan_recursive(&path, project_root, db, count)?;
+            walk_dir(&path, project_root, db, patterns, count)?;
         } else if path.is_file() {
             let rel_path = path
                 .strip_prefix(project_root)?
                 .to_string_lossy()
                 .to_string();
+
+            if !patterns.iter().any(|p| p.matches(&rel_path)) {
+                continue;
+            }
 
             if db.get_file_by_path(&rel_path)?.is_some() {
                 continue;

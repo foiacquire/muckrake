@@ -297,12 +297,7 @@ fn build_subcategory_path(scope: &[ScopeLevel], start: usize) -> Vec<String> {
 }
 
 fn is_category_in_project(project_db: &ProjectDb, name: &str) -> Result<bool> {
-    let categories = project_db.list_categories()?;
-    let pattern_prefix = format!("{name}/");
-    let pattern_glob = format!("{name}/**");
-    Ok(categories
-        .iter()
-        .any(|c| c.pattern == pattern_glob || c.pattern.starts_with(&pattern_prefix)))
+    Ok(project_db.get_category_by_name(name)?.is_some())
 }
 
 fn open_project_db(
@@ -361,6 +356,7 @@ mod tests {
         let db = ProjectDb::create(&dir.join(".mkrk")).unwrap();
         let cat = crate::models::Category {
             id: None,
+            name: "evidence".to_string(),
             pattern: "evidence/**".to_string(),
             category_type: crate::models::CategoryType::Files,
             description: None,
@@ -368,6 +364,7 @@ mod tests {
         db.insert_category(&cat).unwrap();
         let cat2 = crate::models::Category {
             id: None,
+            name: "notes".to_string(),
             pattern: "notes/**".to_string(),
             category_type: crate::models::CategoryType::Files,
             description: None,
@@ -407,6 +404,7 @@ mod tests {
         let db = ProjectDb::create(&proj_dir.join(".mkrk")).unwrap();
         db.insert_category(&crate::models::Category {
             id: None,
+            name: "evidence".to_string(),
             pattern: "evidence/**".to_string(),
             category_type: crate::models::CategoryType::Files,
             description: None,

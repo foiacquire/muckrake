@@ -495,6 +495,7 @@ mod tests {
         let db = ProjectDb::create(&dir.join(".mkrk")).unwrap();
         db.insert_category(&Category {
             id: None,
+            name: "tools".to_string(),
             pattern: "tools/**".to_string(),
             category_type: CategoryType::Tools,
             description: None,
@@ -560,6 +561,7 @@ mod tests {
         let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
         db.insert_category(&Category {
             id: None,
+            name: "scripts".to_string(),
             pattern: "scripts/**".to_string(),
             category_type: CategoryType::Tools,
             description: None,

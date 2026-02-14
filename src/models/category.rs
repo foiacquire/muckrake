@@ -37,6 +37,7 @@ impl FromStr for CategoryType {
 #[derive(Debug, Clone)]
 pub struct Category {
     pub id: Option<i64>,
+    pub name: String,
     pub pattern: String,
     pub category_type: CategoryType,
     pub description: Option<String>,
@@ -45,6 +46,14 @@ pub struct Category {
 impl Category {
     pub fn matches(&self, path: &str) -> Result<bool, glob::PatternError> {
         glob::Pattern::new(&self.pattern).map(|p| p.matches(path))
+    }
+
+    pub fn name_from_pattern(pattern: &str) -> String {
+        pattern
+            .strip_suffix("/**")
+            .or_else(|| pattern.strip_suffix("/*"))
+            .unwrap_or(pattern)
+            .to_string()
     }
 }
 
@@ -79,6 +88,7 @@ mod tests {
     fn category_glob_matching() {
         let cat = Category {
             id: None,
+            name: "evidence".to_string(),
             pattern: "evidence/**".to_string(),
             category_type: CategoryType::Files,
             description: None,
@@ -92,11 +102,23 @@ mod tests {
     fn category_exact_pattern() {
         let cat = Category {
             id: None,
+            name: "notes".to_string(),
             pattern: "notes/**".to_string(),
             category_type: CategoryType::Files,
             description: None,
         };
         assert!(cat.matches("notes/daily.md").unwrap());
         assert!(!cat.matches("evidence/file.pdf").unwrap());
+    }
+
+    #[test]
+    fn name_from_pattern_strips_glob() {
+        assert_eq!(Category::name_from_pattern("evidence/**"), "evidence");
+        assert_eq!(Category::name_from_pattern("tools/*"), "tools");
+        assert_eq!(Category::name_from_pattern("inbox"), "inbox");
+        assert_eq!(
+            Category::name_from_pattern("evidence/financial/**"),
+            "evidence/financial"
+        );
     }
 }

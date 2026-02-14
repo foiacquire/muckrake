@@ -243,29 +243,33 @@ fn dispatch_category(cwd: &Path, command: Option<CategoryCommands>) -> Result<()
     match command {
         None => muckrake::cli::category::run_list(cwd),
         Some(CategoryCommands::Add {
+            name,
             pattern,
             category_type,
             protection,
             description,
-        }) => muckrake::cli::category::run_add(
-            cwd,
-            &pattern,
-            &category_type,
-            &protection,
-            description.as_deref(),
-        ),
+        }) => {
+            let params = muckrake::cli::category::AddCategoryParams {
+                name: &name,
+                pattern: pattern.as_deref(),
+                category_type: &category_type,
+                protection: &protection,
+                description: description.as_deref(),
+            };
+            muckrake::cli::category::run_add(cwd, &params)
+        }
         Some(CategoryCommands::Update {
-            current,
+            name,
             pattern,
             protection,
         }) => muckrake::cli::category::run_update(
             cwd,
-            &current,
+            &name,
             pattern.as_deref(),
             protection.as_deref(),
         ),
-        Some(CategoryCommands::Remove { pattern }) => {
-            muckrake::cli::category::run_remove(cwd, &pattern)
+        Some(CategoryCommands::Remove { name }) => {
+            muckrake::cli::category::run_remove(cwd, &name)
         }
     }
 }

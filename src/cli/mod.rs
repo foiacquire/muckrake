@@ -170,8 +170,11 @@ pub enum ToolCommands {
 pub enum CategoryCommands {
     /// Add a new category
     Add {
-        /// Pattern (e.g., evidence/**)
-        pattern: String,
+        /// Category name (e.g., evidence)
+        name: String,
+        /// Glob pattern (defaults to name/**)
+        #[arg(long)]
+        pattern: Option<String>,
         /// Category type
         #[arg(long = "type", default_value = "files")]
         category_type: String,
@@ -184,8 +187,8 @@ pub enum CategoryCommands {
     },
     /// Update an existing category
     Update {
-        /// Current pattern to match
-        current: String,
+        /// Category name
+        name: String,
         /// New pattern
         #[arg(long)]
         pattern: Option<String>,
@@ -195,8 +198,8 @@ pub enum CategoryCommands {
     },
     /// Remove a category
     Remove {
-        /// Pattern to remove
-        pattern: String,
+        /// Category name
+        name: String,
     },
 }
 

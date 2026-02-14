@@ -129,11 +129,13 @@ impl WorkspaceDb {
         let (sql, values) = Query::insert()
             .into_table(DefaultCategories::Table)
             .columns([
+                DefaultCategories::Name,
                 DefaultCategories::Pattern,
                 DefaultCategories::CategoryType,
                 DefaultCategories::Description,
             ])
             .values_panic([
+                cat.name.as_str().into(),
                 cat.pattern.as_str().into(),
                 cat.category_type.to_string().into(),
                 cat.description.clone().into(),
@@ -147,6 +149,7 @@ impl WorkspaceDb {
         let (sql, values) = Query::select()
             .columns([
                 DefaultCategories::Id,
+                DefaultCategories::Name,
                 DefaultCategories::Pattern,
                 DefaultCategories::CategoryType,
                 DefaultCategories::Description,
@@ -157,10 +160,11 @@ impl WorkspaceDb {
         let rows = stmt.query_map(&*values.as_params(), |row| {
             Ok(Category {
                 id: Some(row.get(0)?),
-                pattern: row.get(1)?,
-                category_type: row.get::<_, String>(2)?.parse().map_err(|e| {
+                name: row.get(1)?,
+                pattern: row.get(2)?,
+                category_type: row.get::<_, String>(3)?.parse().map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        2,
+                        3,
                         rusqlite::types::Type::Text,
                         Box::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -168,7 +172,7 @@ impl WorkspaceDb {
                         )),
                     )
                 })?,
-                description: row.get(3)?,
+                description: row.get(4)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -445,7 +449,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_tool_config_quiet(conn)?;
     migrate_tag_tool_config_quiet(conn)?;
     migrate_default_category_type(conn)?;
-    migrate_default_category_policy_table(conn)
+    migrate_default_category_policy_table(conn)?;
+    migrate_default_category_name(conn)
 }
 
 fn migrate_add_column(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<()> {
@@ -518,6 +523,27 @@ fn migrate_default_category_policy_table(conn: &Connection) -> Result<()> {
              SELECT id, protection_level FROM default_categories;",
         )?;
     }
+    Ok(())
+}
+
+fn migrate_default_category_name(conn: &Connection) -> Result<()> {
+    let has_column = conn
+        .prepare("SELECT name FROM default_categories LIMIT 0")
+        .is_ok();
+    if has_column {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE default_categories ADD COLUMN name TEXT NOT NULL DEFAULT '';",
+    )?;
+    conn.execute_batch(
+        "UPDATE default_categories SET name = CASE
+            WHEN pattern LIKE '%/**' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 3)
+            WHEN pattern LIKE '%/*' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 2)
+            ELSE pattern
+        END
+        WHERE name = '';",
+    )?;
     Ok(())
 }
 
@@ -641,6 +667,7 @@ mod tests {
         let id1 = db
             .insert_default_category(&Category {
                 id: None,
+                name: "evidence".to_string(),
                 pattern: "evidence/**".to_string(),
                 category_type: CategoryType::Files,
                 description: Some("Evidence".to_string()),
@@ -652,6 +679,7 @@ mod tests {
         let id2 = db
             .insert_default_category(&Category {
                 id: None,
+                name: "notes".to_string(),
                 pattern: "notes/**".to_string(),
                 category_type: CategoryType::Files,
                 description: Some("Notes".to_string()),
@@ -671,6 +699,7 @@ mod tests {
         let cat_id = db
             .insert_default_category(&Category {
                 id: None,
+                name: "docs".to_string(),
                 pattern: "docs/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -700,6 +729,7 @@ mod tests {
         let id1 = db
             .insert_default_category(&Category {
                 id: None,
+                name: "evidence".to_string(),
                 pattern: "evidence/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -711,6 +741,7 @@ mod tests {
         let id2 = db
             .insert_default_category(&Category {
                 id: None,
+                name: "notes".to_string(),
                 pattern: "notes/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -732,6 +763,7 @@ mod tests {
         let (_dir, db) = setup();
         db.insert_default_category(&Category {
             id: None,
+            name: "stuff".to_string(),
             pattern: "stuff/**".to_string(),
             category_type: CategoryType::Files,
             description: None,

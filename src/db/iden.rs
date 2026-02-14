@@ -4,6 +4,7 @@ use sea_query::Iden;
 pub enum Categories {
     Table,
     Id,
+    Name,
     Pattern,
     CategoryType,
     Description,
@@ -95,6 +96,7 @@ pub enum Projects {
 pub enum DefaultCategories {
     Table,
     Id,
+    Name,
     Pattern,
     CategoryType,
     Description,

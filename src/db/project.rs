@@ -48,11 +48,13 @@ impl ProjectDb {
         let (sql, values) = Query::insert()
             .into_table(Categories::Table)
             .columns([
+                Categories::Name,
                 Categories::Pattern,
                 Categories::CategoryType,
                 Categories::Description,
             ])
             .values_panic([
+                cat.name.as_str().into(),
                 cat.pattern.as_str().into(),
                 cat.category_type.to_string().into(),
                 cat.description.clone().into(),
@@ -64,64 +66,36 @@ impl ProjectDb {
 
     pub fn list_categories(&self) -> Result<Vec<Category>> {
         let (sql, values) = Query::select()
-            .columns([
-                Categories::Id,
-                Categories::Pattern,
-                Categories::CategoryType,
-                Categories::Description,
-            ])
+            .columns(CATEGORY_COLUMNS)
             .from(Categories::Table)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), |row| {
-            Ok(Category {
-                id: Some(row.get(0)?),
-                pattern: row.get(1)?,
-                category_type: row.get::<_, String>(2)?.parse().map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("{e}"),
-                        )),
-                    )
-                })?,
-                description: row.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_category)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_category_by_pattern(&self, pattern: &str) -> Result<Option<Category>> {
         let (sql, values) = Query::select()
-            .columns([
-                Categories::Id,
-                Categories::Pattern,
-                Categories::CategoryType,
-                Categories::Description,
-            ])
+            .columns(CATEGORY_COLUMNS)
             .from(Categories::Table)
             .and_where(Expr::col(Categories::Pattern).eq(pattern))
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(&*values.as_params(), |row| {
-            Ok(Category {
-                id: Some(row.get(0)?),
-                pattern: row.get(1)?,
-                category_type: row.get::<_, String>(2)?.parse().map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("{e}"),
-                        )),
-                    )
-                })?,
-                description: row.get(3)?,
-            })
-        })?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_category)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_category_by_name(&self, name: &str) -> Result<Option<Category>> {
+        let (sql, values) = Query::select()
+            .columns(CATEGORY_COLUMNS)
+            .from(Categories::Table)
+            .and_where(Expr::col(Categories::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_category)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -718,7 +692,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_tool_config_quiet(conn)?;
     migrate_tag_tool_config_quiet(conn)?;
     migrate_category_policy_table(conn)?;
-    migrate_file_tags_hash(conn)
+    migrate_file_tags_hash(conn)?;
+    migrate_category_name(conn)
 }
 
 fn migrate_category_type(conn: &Connection) -> Result<()> {
@@ -806,6 +781,52 @@ fn migrate_file_tags_hash(conn: &Connection) -> Result<()> {
         conn.execute_batch("ALTER TABLE file_tags ADD COLUMN file_hash TEXT;")?;
     }
     Ok(())
+}
+
+fn migrate_category_name(conn: &Connection) -> Result<()> {
+    let has_column = conn
+        .prepare("SELECT name FROM categories LIMIT 0")
+        .is_ok();
+    if has_column {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE categories ADD COLUMN name TEXT NOT NULL DEFAULT '';")?;
+    conn.execute_batch(
+        "UPDATE categories SET name = CASE
+            WHEN pattern LIKE '%/**' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 3)
+            WHEN pattern LIKE '%/*' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 2)
+            ELSE pattern
+        END
+        WHERE name = '';",
+    )?;
+    Ok(())
+}
+
+const CATEGORY_COLUMNS: [Categories; 5] = [
+    Categories::Id,
+    Categories::Name,
+    Categories::Pattern,
+    Categories::CategoryType,
+    Categories::Description,
+];
+
+fn row_to_category(row: &rusqlite::Row) -> rusqlite::Result<Category> {
+    Ok(Category {
+        id: Some(row.get(0)?),
+        name: row.get(1)?,
+        pattern: row.get(2)?,
+        category_type: row.get::<_, String>(3)?.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{e}"),
+                )),
+            )
+        })?,
+        description: row.get(4)?,
+    })
 }
 
 const FILE_COLUMNS: [Files; 9] = [
@@ -944,6 +965,7 @@ mod tests {
         let (_dir, db) = setup();
         let cat = Category {
             id: None,
+            name: "evidence".to_string(),
             pattern: "evidence/**".to_string(),
             category_type: CategoryType::Files,
             description: Some("Evidence files".to_string()),
@@ -970,6 +992,7 @@ mod tests {
         ] {
             let cat = Category {
                 id: None,
+                name: ct.to_string(),
                 pattern: format!("{}/**", ct),
                 category_type: *ct,
                 description: None,
@@ -1210,6 +1233,7 @@ mod tests {
         let id1 = db
             .insert_category(&Category {
                 id: None,
+                name: "evidence".to_string(),
                 pattern: "evidence/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1221,6 +1245,7 @@ mod tests {
         let id2 = db
             .insert_category(&Category {
                 id: None,
+                name: "evidence/financial".to_string(),
                 pattern: "evidence/financial/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1245,6 +1270,7 @@ mod tests {
         let id1 = db
             .insert_category(&Category {
                 id: None,
+                name: "notes".to_string(),
                 pattern: "notes/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1256,6 +1282,7 @@ mod tests {
         let id2 = db
             .insert_category(&Category {
                 id: None,
+                name: "notes/confidential".to_string(),
                 pattern: "notes/confidential/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1279,6 +1306,7 @@ mod tests {
         let id1 = db
             .insert_category(&Category {
                 id: None,
+                name: "evidence".to_string(),
                 pattern: "evidence/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1290,6 +1318,7 @@ mod tests {
         let id2 = db
             .insert_category(&Category {
                 id: None,
+                name: "evidence/financial".to_string(),
                 pattern: "evidence/financial/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1301,6 +1330,7 @@ mod tests {
         let id3 = db
             .insert_category(&Category {
                 id: None,
+                name: "evidence/financial/tax".to_string(),
                 pattern: "evidence/financial/tax/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1363,6 +1393,7 @@ mod tests {
         let cat_id = db
             .insert_category(&Category {
                 id: None,
+                name: "docs".to_string(),
                 pattern: "docs/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1392,6 +1423,7 @@ mod tests {
         let cat_id = db
             .insert_category(&Category {
                 id: None,
+                name: "evidence".to_string(),
                 pattern: "evidence/**".to_string(),
                 category_type: CategoryType::Files,
                 description: None,
@@ -1420,6 +1452,7 @@ mod tests {
         let (_dir, db) = setup();
         db.insert_category(&Category {
             id: None,
+            name: "notes".to_string(),
             pattern: "notes/**".to_string(),
             category_type: CategoryType::Files,
             description: None,

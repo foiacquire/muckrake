@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tag_tool_config (
 pub const PROJECT_SCHEMA_PREFIX: &str = "
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
     pattern TEXT NOT NULL UNIQUE,
     category_type TEXT NOT NULL DEFAULT 'files',
     description TEXT
@@ -116,6 +117,7 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE TABLE IF NOT EXISTS default_categories (
     id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
     pattern TEXT NOT NULL UNIQUE,
     category_type TEXT NOT NULL DEFAULT 'files',
     description TEXT

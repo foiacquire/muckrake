@@ -6,12 +6,18 @@ use crate::db::{ProjectDb, WorkspaceDb};
 use crate::models::{Category, CategoryType, ProtectionLevel};
 use crate::reference::validate_name;
 
-const DEFAULT_CATEGORIES: &[(&str, &str, &str, &str)] = &[
-    ("evidence/**", "files", "immutable", "Evidence files"),
-    ("sources/**", "files", "immutable", "Source materials"),
-    ("analysis/**", "files", "protected", "Analysis documents"),
-    ("notes/**", "files", "editable", "Working notes"),
-    ("tools/**", "tools", "editable", "Project tools"),
+const DEFAULT_CATEGORIES: &[(&str, &str, &str, &str, &str)] = &[
+    ("evidence", "evidence/**", "files", "immutable", "Evidence files"),
+    ("sources", "sources/**", "files", "immutable", "Source materials"),
+    (
+        "analysis",
+        "analysis/**",
+        "files",
+        "protected",
+        "Analysis documents",
+    ),
+    ("notes", "notes/**", "files", "editable", "Working notes"),
+    ("tools", "tools/**", "tools", "editable", "Project tools"),
 ];
 
 pub fn run_init_project(
@@ -120,11 +126,13 @@ fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, Protect
             let parts: Vec<&str> = s.splitn(3, ':').collect();
             match parts.len() {
                 2 => {
+                    let pattern = parts[0];
                     let protection_level: ProtectionLevel = parts[1].parse()?;
                     Ok((
                         Category {
                             id: None,
-                            pattern: parts[0].to_string(),
+                            name: Category::name_from_pattern(pattern),
+                            pattern: pattern.to_string(),
                             category_type: CategoryType::Files,
                             description: None,
                         },
@@ -132,12 +140,14 @@ fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, Protect
                     ))
                 }
                 3 => {
+                    let pattern = parts[0];
                     let category_type: CategoryType = parts[1].parse()?;
                     let protection_level: ProtectionLevel = parts[2].parse()?;
                     Ok((
                         Category {
                             id: None,
-                            pattern: parts[0].to_string(),
+                            name: Category::name_from_pattern(pattern),
+                            pattern: pattern.to_string(),
                             category_type,
                             description: None,
                         },
@@ -169,10 +179,11 @@ fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<(Category, Protectio
 fn default_categories_with_policies() -> Vec<(Category, ProtectionLevel)> {
     DEFAULT_CATEGORIES
         .iter()
-        .map(|(pattern, cat_type, level, desc)| {
+        .map(|(name, pattern, cat_type, level, desc)| {
             (
                 Category {
                     id: None,
+                    name: (*name).to_string(),
                     pattern: (*pattern).to_string(),
                     category_type: cat_type.parse().expect("invalid default category type"),
                     description: Some((*desc).to_string()),
@@ -239,9 +250,10 @@ pub fn run_init_workspace(
     }
 
     if !no_categories {
-        for (pattern, cat_type, level, desc) in DEFAULT_CATEGORIES {
+        for (name, pattern, cat_type, level, desc) in DEFAULT_CATEGORIES {
             let cat = Category {
                 id: None,
+                name: (*name).to_string(),
                 pattern: (*pattern).to_string(),
                 category_type: cat_type.parse().expect("invalid default category type"),
                 description: Some((*desc).to_string()),
