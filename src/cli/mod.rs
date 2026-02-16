@@ -18,7 +18,35 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "mkrk",
     about = "Investigative journalism research management",
-    version
+    version,
+    after_long_help = "\
+SCOPE PREFIX:
+    Commands can be scoped to a specific project or the entire workspace
+    by placing a ':'-prefixed argument before the subcommand:
+
+    mkrk :<project> <command>    Run command in a different project
+    mkrk : <command>             Run command across entire workspace
+
+    Examples:
+      mkrk :bailey list            List files in project \"bailey\"
+      mkrk :bailey list :evidence  List evidence in project \"bailey\"
+      mkrk : verify                Verify all projects in workspace
+
+REFERENCES:
+    Many commands accept structured references starting with ':'.
+    These select files by category, project, tags, and globs:
+
+    :category                    Files in a category
+    :project.category            Cross-project reference
+    :category.subcategory        Nested category path
+    :{a,b}.{c,d}                 Brace expansion (cartesian product)
+    :scope!tag                   Filter by tag
+    :scope!t1,t2                 OR within a tag group
+    :scope!t1!t2                 AND across tag groups
+    :scope/*.pdf                 Glob filter on filenames
+    :                            All files in current scope
+    :!tag                        All files matching a tag
+    :/*.pdf                      All files matching a glob"
 )]
 pub struct Cli {
     #[command(subcommand)]
