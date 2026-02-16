@@ -533,9 +533,7 @@ fn migrate_default_category_name(conn: &Connection) -> Result<()> {
     if has_column {
         return Ok(());
     }
-    conn.execute_batch(
-        "ALTER TABLE default_categories ADD COLUMN name TEXT NOT NULL DEFAULT '';",
-    )?;
+    conn.execute_batch("ALTER TABLE default_categories ADD COLUMN name TEXT NOT NULL DEFAULT '';")?;
     conn.execute_batch(
         "UPDATE default_categories SET name = CASE
             WHEN pattern LIKE '%/**' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 3)

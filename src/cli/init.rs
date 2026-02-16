@@ -7,8 +7,20 @@ use crate::models::{Category, CategoryType, ProtectionLevel};
 use crate::reference::validate_name;
 
 const DEFAULT_CATEGORIES: &[(&str, &str, &str, &str, &str)] = &[
-    ("evidence", "evidence/**", "files", "immutable", "Evidence files"),
-    ("sources", "sources/**", "files", "immutable", "Source materials"),
+    (
+        "evidence",
+        "evidence/**",
+        "files",
+        "immutable",
+        "Evidence files",
+    ),
+    (
+        "sources",
+        "sources/**",
+        "files",
+        "immutable",
+        "Source materials",
+    ),
     (
         "analysis",
         "analysis/**",

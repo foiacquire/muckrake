@@ -73,8 +73,9 @@ pub fn run_add(cwd: &Path, params: &AddCategoryParams<'_>) -> Result<()> {
         bail!("category '{name}' already exists");
     }
 
-    let resolved_pattern =
-        params.pattern.map_or_else(|| format!("{name}/**"), String::from);
+    let resolved_pattern = params
+        .pattern
+        .map_or_else(|| format!("{name}/**"), String::from);
 
     let cat_type: CategoryType = params.category_type.parse()?;
     let level: ProtectionLevel = params.protection.parse()?;
