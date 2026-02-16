@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use clap::Parser;
 
 use muckrake::cli::scope::extract_scope;
-use muckrake::cli::{CategoryCommands, Cli, Commands, InboxCommands, ToolCommands};
+use muckrake::cli::{CategoryCommands, Cli, Commands, InboxCommands, RuleCommands, ToolCommands};
 use muckrake::context::{discover, resolve_scope, Context};
 
 fn main() -> Result<()> {
@@ -100,6 +100,7 @@ const fn should_iterate_projects(command: &Commands) -> bool {
             command,
             ToolCommands::Add { .. } | ToolCommands::Remove { .. }
         ),
+        Commands::Rule { command } => matches!(command, RuleCommands::List),
         _ => false,
     }
 }
@@ -167,6 +168,7 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
         Commands::Projects => muckrake::cli::projects::run(cwd),
         Commands::Tool { command } => dispatch_tool(cwd, command),
         Commands::Category { command } => dispatch_category(cwd, command),
+        Commands::Rule { command } => dispatch_rule(cwd, command),
     }
 }
 
@@ -271,5 +273,40 @@ fn dispatch_category(cwd: &Path, command: Option<CategoryCommands>) -> Result<()
         Some(CategoryCommands::Remove { name }) => {
             muckrake::cli::category::run_remove(cwd, &name)
         }
+    }
+}
+
+fn dispatch_rule(cwd: &Path, command: RuleCommands) -> Result<()> {
+    match command {
+        RuleCommands::Add {
+            name,
+            on,
+            action,
+            tool,
+            tag,
+            category,
+            mime_type,
+            file_type,
+            trigger_tag,
+            priority,
+        } => {
+            let params = muckrake::cli::rule::AddRuleParams {
+                name: &name,
+                on: &on,
+                action: &action,
+                tool: tool.as_deref(),
+                tag: tag.as_deref(),
+                category: category.as_deref(),
+                mime_type: mime_type.as_deref(),
+                file_type: file_type.as_deref(),
+                trigger_tag: trigger_tag.as_deref(),
+                priority,
+            };
+            muckrake::cli::rule::run_add(cwd, &params)
+        }
+        RuleCommands::List => muckrake::cli::rule::run_list(cwd),
+        RuleCommands::Remove { name } => muckrake::cli::rule::run_remove(cwd, &name),
+        RuleCommands::Enable { name } => muckrake::cli::rule::run_enable(cwd, &name),
+        RuleCommands::Disable { name } => muckrake::cli::rule::run_disable(cwd, &name),
     }
 }

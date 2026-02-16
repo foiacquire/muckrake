@@ -5,6 +5,7 @@ pub mod ingest;
 pub mod init;
 pub mod list;
 pub mod projects;
+pub mod rule;
 pub mod scope;
 pub mod status;
 pub mod tags;
@@ -147,6 +148,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<CategoryCommands>,
     },
+    /// Manage event-driven rules
+    Rule {
+        #[command(subcommand)]
+        command: RuleCommands,
+    },
 }
 
 #[derive(Clone, Subcommand)]
@@ -242,5 +248,58 @@ pub enum InboxCommands {
         /// Target category path
         #[arg(long = "as")]
         category: Option<String>,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+pub enum RuleCommands {
+    /// Add a new rule
+    Add {
+        /// Rule name (unique identifier)
+        name: String,
+        /// Trigger event: ingest, tag, untag, categorize
+        #[arg(long)]
+        on: String,
+        /// Action type: run-tool, add-tag, remove-tag
+        #[arg(long)]
+        action: String,
+        /// Tool name (required for run-tool action)
+        #[arg(long)]
+        tool: Option<String>,
+        /// Tag name (required for add-tag/remove-tag action)
+        #[arg(long)]
+        tag: Option<String>,
+        /// Category filter (only trigger for files in this category)
+        #[arg(long)]
+        category: Option<String>,
+        /// MIME type filter (e.g., application/pdf, image/*)
+        #[arg(long)]
+        mime_type: Option<String>,
+        /// File extension filter (e.g., pdf, wav)
+        #[arg(long = "file-type")]
+        file_type: Option<String>,
+        /// Tag name that triggers this rule (for tag/untag events)
+        #[arg(long = "trigger-tag")]
+        trigger_tag: Option<String>,
+        /// Priority (lower fires first, default 0)
+        #[arg(long, default_value = "0")]
+        priority: i32,
+    },
+    /// List all rules
+    List,
+    /// Remove a rule
+    Remove {
+        /// Rule name
+        name: String,
+    },
+    /// Enable a disabled rule
+    Enable {
+        /// Rule name
+        name: String,
+    },
+    /// Disable a rule without removing it
+    Disable {
+        /// Rule name
+        name: String,
     },
 }
