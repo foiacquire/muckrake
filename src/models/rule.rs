@@ -32,7 +32,9 @@ impl FromStr for TriggerEvent {
             "tag" => Ok(Self::Tag),
             "untag" => Ok(Self::Untag),
             "categorize" => Ok(Self::Categorize),
-            other => bail!("unknown trigger event: '{other}' (expected: ingest, tag, untag, categorize)"),
+            other => {
+                bail!("unknown trigger event: '{other}' (expected: ingest, tag, untag, categorize)")
+            }
         }
     }
 }
@@ -62,7 +64,9 @@ impl FromStr for ActionType {
             "run_tool" | "run-tool" => Ok(Self::RunTool),
             "add_tag" | "add-tag" => Ok(Self::AddTag),
             "remove_tag" | "remove-tag" => Ok(Self::RemoveTag),
-            other => bail!("unknown action type: '{other}' (expected: run-tool, add-tag, remove-tag)"),
+            other => {
+                bail!("unknown action type: '{other}' (expected: run-tool, add-tag, remove-tag)")
+            }
         }
     }
 }
@@ -134,7 +138,11 @@ mod tests {
 
     #[test]
     fn action_type_roundtrip() {
-        for action in [ActionType::RunTool, ActionType::AddTag, ActionType::RemoveTag] {
+        for action in [
+            ActionType::RunTool,
+            ActionType::AddTag,
+            ActionType::RemoveTag,
+        ] {
             let s = action.to_string();
             let parsed: ActionType = s.parse().unwrap();
             assert_eq!(parsed, action);
@@ -143,7 +151,10 @@ mod tests {
 
     #[test]
     fn action_type_accepts_dashes() {
-        assert_eq!("run-tool".parse::<ActionType>().unwrap(), ActionType::RunTool);
+        assert_eq!(
+            "run-tool".parse::<ActionType>().unwrap(),
+            ActionType::RunTool
+        );
         assert_eq!("add-tag".parse::<ActionType>().unwrap(), ActionType::AddTag);
         assert_eq!(
             "remove-tag".parse::<ActionType>().unwrap(),

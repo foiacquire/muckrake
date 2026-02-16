@@ -270,9 +270,7 @@ fn dispatch_category(cwd: &Path, command: Option<CategoryCommands>) -> Result<()
             pattern.as_deref(),
             protection.as_deref(),
         ),
-        Some(CategoryCommands::Remove { name }) => {
-            muckrake::cli::category::run_remove(cwd, &name)
-        }
+        Some(CategoryCommands::Remove { name }) => muckrake::cli::category::run_remove(cwd, &name),
     }
 }
 

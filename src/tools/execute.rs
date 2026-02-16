@@ -33,10 +33,18 @@ pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
 
     let candidate = resolve_tool(&lookup, params.project_db, params.workspace_db)?;
     let Some(candidate) = candidate else {
-        bail!("no tool '{}' found for file '{}'", params.tool_name, params.file_rel_path);
+        bail!(
+            "no tool '{}' found for file '{}'",
+            params.tool_name,
+            params.file_rel_path
+        );
     };
 
-    let env_map = build_tool_env(candidate.env.as_deref(), &candidate.command, candidate.quiet)?;
+    let env_map = build_tool_env(
+        candidate.env.as_deref(),
+        &candidate.command,
+        candidate.quiet,
+    )?;
 
     let file_path_str = params.file_abs_path.to_string_lossy();
     let mut cmd = Command::new(&candidate.command);
@@ -50,10 +58,7 @@ pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
 
     let status = cmd.status()?;
     if !status.success() {
-        bail!(
-            "tool '{}' exited with {status}",
-            params.tool_name,
-        );
+        bail!("tool '{}' exited with {status}", params.tool_name,);
     }
 
     Ok(())

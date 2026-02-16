@@ -48,20 +48,12 @@ pub fn evaluate_rules(
 
         fired.insert(rule_id);
 
-        eprintln!(
-            "  {} rule '{}' triggered",
-            style("→").dim(),
-            rule.name,
-        );
+        eprintln!("  {} rule '{}' triggered", style("→").dim(), rule.name,);
 
         match execute_action(rule, event, ctx, fired) {
             Ok(()) => audit_rule(ctx.project_db, event, rule),
             Err(e) => {
-                eprintln!(
-                    "  {} rule '{}' failed: {e}",
-                    style("✗").red(),
-                    rule.name,
-                );
+                eprintln!("  {} rule '{}' failed: {e}", style("✗").red(), rule.name,);
             }
         }
     }

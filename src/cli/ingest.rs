@@ -49,10 +49,7 @@ pub fn workspace_from_ctx(ctx: &Context) -> (Option<&Path>, Option<&WorkspaceDb>
     }
 }
 
-fn resolve_patterns(
-    db: &crate::db::ProjectDb,
-    scope: Option<&str>,
-) -> Result<Vec<glob::Pattern>> {
+fn resolve_patterns(db: &crate::db::ProjectDb, scope: Option<&str>) -> Result<Vec<glob::Pattern>> {
     let Some(name) = scope else {
         return Ok(vec![glob::Pattern::new("**")?]);
     };

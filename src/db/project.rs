@@ -875,9 +875,7 @@ fn migrate_file_tags_hash(conn: &Connection) -> Result<()> {
 }
 
 fn migrate_category_name(conn: &Connection) -> Result<()> {
-    let has_column = conn
-        .prepare("SELECT name FROM categories LIMIT 0")
-        .is_ok();
+    let has_column = conn.prepare("SELECT name FROM categories LIMIT 0").is_ok();
     if has_column {
         return Ok(());
     }
@@ -1053,48 +1051,40 @@ const RULE_COLUMNS_INSERT: [Rules; 8] = [
     Rules::CreatedAt,
 ];
 
+fn col_conversion_err(col: usize, e: impl std::fmt::Display) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        col,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{e}"),
+        )),
+    )
+}
+
 fn row_to_rule(row: &rusqlite::Row) -> rusqlite::Result<Rule> {
     let trigger_event_str: String = row.get(3)?;
     let trigger_filter_json: Option<String> = row.get(4)?;
     let action_type_str: String = row.get(5)?;
     let action_config_json: String = row.get(6)?;
 
-    let trigger_event: TriggerEvent = trigger_event_str.parse().map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
-        )
-    })?;
+    let trigger_event: TriggerEvent = trigger_event_str
+        .parse()
+        .map_err(|e| col_conversion_err(3, e))?;
 
     let trigger_filter: TriggerFilter = trigger_filter_json
         .as_deref()
         .map(serde_json::from_str)
         .transpose()
-        .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                4,
-                rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
-            )
-        })?
+        .map_err(|e| col_conversion_err(4, e))?
         .unwrap_or_default();
 
-    let action_type: ActionType = action_type_str.parse().map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            5,
-            rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
-        )
-    })?;
+    let action_type: ActionType = action_type_str
+        .parse()
+        .map_err(|e| col_conversion_err(5, e))?;
 
-    let action_config: ActionConfig = serde_json::from_str(&action_config_json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(
-            6,
-            rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
-        )
-    })?;
+    let action_config: ActionConfig =
+        serde_json::from_str(&action_config_json).map_err(|e| col_conversion_err(6, e))?;
 
     Ok(Rule {
         id: Some(row.get(0)?),
@@ -1819,7 +1809,10 @@ mod tests {
         assert_eq!(tag_rules[0].name, "tag-rule");
 
         db.set_rule_enabled("ingest-rule", false).unwrap();
-        assert!(db.get_matching_rules(TriggerEvent::Ingest).unwrap().is_empty());
+        assert!(db
+            .get_matching_rules(TriggerEvent::Ingest)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
