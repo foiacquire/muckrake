@@ -1,21 +1,32 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
 use chrono::Utc;
 
-use crate::context::discover;
+use crate::context::{discover, Context};
+use crate::db::WorkspaceDb;
 use crate::integrity;
-use crate::models::{ProtectionLevel, TrackedFile};
+use crate::models::{ProtectionLevel, TrackedFile, TriggerEvent};
+use crate::rules::{evaluate_rules, RuleContext, RuleEvent};
 use crate::util::whoami;
 
 pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
+    let (workspace_root, workspace_db) = workspace_from_ctx(&ctx);
+
+    let rule_ctx = RuleContext {
+        project_root,
+        project_db,
+        workspace_root,
+        workspace_db,
+    };
 
     let patterns = resolve_patterns(project_db, scope)?;
 
     let mut count = 0;
-    scan_matching(project_root, project_db, &patterns, &mut count)?;
+    walk_dir(project_root, &rule_ctx, &patterns, &mut count)?;
 
     if count == 0 {
         eprintln!("No new files to ingest");
@@ -24,6 +35,18 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn workspace_from_ctx(ctx: &Context) -> (Option<&Path>, Option<&WorkspaceDb>) {
+    if let Context::Project {
+        workspace: Some(ws),
+        ..
+    } = ctx
+    {
+        (Some(ws.workspace_root.as_path()), Some(&ws.workspace_db))
+    } else {
+        (None, None)
+    }
 }
 
 fn resolve_patterns(
@@ -45,19 +68,9 @@ fn resolve_patterns(
     ])
 }
 
-fn scan_matching(
-    project_root: &Path,
-    db: &crate::db::ProjectDb,
-    patterns: &[glob::Pattern],
-    count: &mut usize,
-) -> Result<()> {
-    walk_dir(project_root, project_root, db, patterns, count)
-}
-
 fn walk_dir(
     dir: &Path,
-    project_root: &Path,
-    db: &crate::db::ProjectDb,
+    rule_ctx: &RuleContext<'_>,
     patterns: &[glob::Pattern],
     count: &mut usize,
 ) -> Result<()> {
@@ -71,10 +84,10 @@ fn walk_dir(
         }
 
         if path.is_dir() {
-            walk_dir(&path, project_root, db, patterns, count)?;
+            walk_dir(&path, rule_ctx, patterns, count)?;
         } else if path.is_file() {
             let rel_path = path
-                .strip_prefix(project_root)?
+                .strip_prefix(rule_ctx.project_root)?
                 .to_string_lossy()
                 .to_string();
 
@@ -82,12 +95,25 @@ fn walk_dir(
                 continue;
             }
 
-            if db.get_file_by_path(&rel_path)?.is_some() {
+            if rule_ctx.project_db.get_file_by_path(&rel_path)?.is_some() {
                 continue;
             }
 
-            track_file(project_root, db, &path, &rel_path)?;
+            let file_id = track_file(rule_ctx.project_root, rule_ctx.project_db, &path, &rel_path)?;
             *count += 1;
+
+            if let Ok(Some(file)) = rule_ctx.project_db.get_file_by_path(&rel_path) {
+                let event = RuleEvent {
+                    event: TriggerEvent::Ingest,
+                    file: &file,
+                    file_id,
+                    rel_path: &rel_path,
+                    tag_name: None,
+                    target_category: None,
+                };
+                let mut fired = HashSet::new();
+                let _ = evaluate_rules(&event, rule_ctx, &mut fired);
+            }
         }
     }
     Ok(())
