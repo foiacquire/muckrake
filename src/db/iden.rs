@@ -111,6 +111,20 @@ pub enum DefaultCategoryPolicy {
 }
 
 #[derive(Iden)]
+pub enum Rules {
+    Table,
+    Id,
+    Name,
+    Enabled,
+    TriggerEvent,
+    TriggerFilter,
+    ActionType,
+    ActionConfig,
+    Priority,
+    CreatedAt,
+}
+
+#[derive(Iden)]
 pub enum EntityLinks {
     Table,
     Id,

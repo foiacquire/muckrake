@@ -10,10 +10,13 @@ use sea_query::{
 use sea_query_rusqlite::RusqliteBinder;
 
 use crate::models::policy::strictest;
-use crate::models::{Category, FileTag, ProtectionLevel, TrackedFile};
+use crate::models::{
+    ActionConfig, ActionType, Category, FileTag, ProtectionLevel, Rule, TrackedFile, TriggerEvent,
+    TriggerFilter,
+};
 
 use super::iden::{
-    AuditLog, Categories, CategoryPolicy, FileTags, Files, TagToolConfig, ToolConfig,
+    AuditLog, Categories, CategoryPolicy, FileTags, Files, Rules, TagToolConfig, ToolConfig,
 };
 use super::schema::PROJECT_SCHEMA;
 
@@ -685,6 +688,93 @@ impl ProjectDb {
             None => Ok(None),
         }
     }
+
+    // ── Rules ────────────────────────────────────────────────────────
+
+    pub fn insert_rule(&self, rule: &Rule) -> Result<i64> {
+        let filter_json = if rule.trigger_filter.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&rule.trigger_filter)?)
+        };
+        let action_json = serde_json::to_string(&rule.action_config)?;
+
+        let (sql, values) = Query::insert()
+            .into_table(Rules::Table)
+            .columns(RULE_COLUMNS_INSERT)
+            .values_panic([
+                rule.name.as_str().into(),
+                i64::from(rule.enabled).into(),
+                rule.trigger_event.to_string().into(),
+                filter_json.into(),
+                rule.action_type.to_string().into(),
+                action_json.into(),
+                i64::from(rule.priority).into(),
+                rule.created_at.as_str().into(),
+            ])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_rules(&self) -> Result<Vec<Rule>> {
+        let (sql, values) = Query::select()
+            .columns(RULE_COLUMNS)
+            .from(Rules::Table)
+            .order_by(Rules::Priority, Order::Asc)
+            .order_by(Rules::Name, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_rule)?;
+        rows.map(|r| Ok(r?)).collect()
+    }
+
+    pub fn get_rule_by_name(&self, name: &str) -> Result<Option<Rule>> {
+        let (sql, values) = Query::select()
+            .columns(RULE_COLUMNS)
+            .from(Rules::Table)
+            .and_where(Expr::col(Rules::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_rule)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn remove_rule(&self, name: &str) -> Result<u64> {
+        let (sql, values) = Query::delete()
+            .from_table(Rules::Table)
+            .and_where(Expr::col(Rules::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let count = self.conn.execute(&sql, &*values.as_params())?;
+        Ok(count as u64)
+    }
+
+    pub fn set_rule_enabled(&self, name: &str, enabled: bool) -> Result<u64> {
+        let (sql, values) = Query::update()
+            .table(Rules::Table)
+            .value(Rules::Enabled, i64::from(enabled))
+            .and_where(Expr::col(Rules::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let count = self.conn.execute(&sql, &*values.as_params())?;
+        Ok(count as u64)
+    }
+
+    pub fn get_matching_rules(&self, event: TriggerEvent) -> Result<Vec<Rule>> {
+        let (sql, values) = Query::select()
+            .columns(RULE_COLUMNS)
+            .from(Rules::Table)
+            .and_where(Expr::col(Rules::Enabled).eq(1_i64))
+            .and_where(Expr::col(Rules::TriggerEvent).eq(event.to_string()))
+            .order_by(Rules::Priority, Order::Asc)
+            .order_by(Rules::Name, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_rule)?;
+        rows.map(|r| Ok(r?)).collect()
+    }
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -693,7 +783,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_tag_tool_config_quiet(conn)?;
     migrate_category_policy_table(conn)?;
     migrate_file_tags_hash(conn)?;
-    migrate_category_name(conn)
+    migrate_category_name(conn)?;
+    migrate_rules_table(conn)
 }
 
 fn migrate_category_type(conn: &Connection) -> Result<()> {
@@ -937,6 +1028,106 @@ pub(crate) fn row_to_tag_tool_config(row: &rusqlite::Row) -> rusqlite::Result<Ta
         env: row.get(5)?,
         quiet: row.get::<_, i32>(6)? != 0,
     })
+}
+
+const RULE_COLUMNS: [Rules; 9] = [
+    Rules::Id,
+    Rules::Name,
+    Rules::Enabled,
+    Rules::TriggerEvent,
+    Rules::TriggerFilter,
+    Rules::ActionType,
+    Rules::ActionConfig,
+    Rules::Priority,
+    Rules::CreatedAt,
+];
+
+const RULE_COLUMNS_INSERT: [Rules; 8] = [
+    Rules::Name,
+    Rules::Enabled,
+    Rules::TriggerEvent,
+    Rules::TriggerFilter,
+    Rules::ActionType,
+    Rules::ActionConfig,
+    Rules::Priority,
+    Rules::CreatedAt,
+];
+
+fn row_to_rule(row: &rusqlite::Row) -> rusqlite::Result<Rule> {
+    let trigger_event_str: String = row.get(3)?;
+    let trigger_filter_json: Option<String> = row.get(4)?;
+    let action_type_str: String = row.get(5)?;
+    let action_config_json: String = row.get(6)?;
+
+    let trigger_event: TriggerEvent = trigger_event_str.parse().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
+        )
+    })?;
+
+    let trigger_filter: TriggerFilter = trigger_filter_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
+            )
+        })?
+        .unwrap_or_default();
+
+    let action_type: ActionType = action_type_str.parse().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            5,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
+        )
+    })?;
+
+    let action_config: ActionConfig = serde_json::from_str(&action_config_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}"))),
+        )
+    })?;
+
+    Ok(Rule {
+        id: Some(row.get(0)?),
+        name: row.get(1)?,
+        enabled: row.get::<_, i32>(2)? != 0,
+        trigger_event,
+        trigger_filter,
+        action_type,
+        action_config,
+        priority: row.get(7)?,
+        created_at: row.get(8)?,
+    })
+}
+
+fn migrate_rules_table(conn: &Connection) -> Result<()> {
+    let has_table = conn.prepare("SELECT id FROM rules LIMIT 0").is_ok();
+    if has_table {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS rules (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            trigger_event TEXT NOT NULL,
+            trigger_filter TEXT,
+            action_type TEXT NOT NULL,
+            action_config TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1551,5 +1742,168 @@ mod tests {
             db.get_policy_for_category(notes_id).unwrap(),
             Some(ProtectionLevel::Protected)
         );
+    }
+
+    fn make_rule(name: &str, event: TriggerEvent, action_type: ActionType) -> Rule {
+        Rule {
+            id: None,
+            name: name.to_string(),
+            enabled: true,
+            trigger_event: event,
+            trigger_filter: TriggerFilter::default(),
+            action_type,
+            action_config: ActionConfig {
+                tool: Some("ocr".to_string()),
+                tag: None,
+            },
+            priority: 0,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn rule_crud() {
+        let (_dir, db) = setup();
+        let rule = make_rule("ocr-pdfs", TriggerEvent::Ingest, ActionType::RunTool);
+        let id = db.insert_rule(&rule).unwrap();
+        assert!(id > 0);
+
+        let rules = db.list_rules().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "ocr-pdfs");
+        assert!(rules[0].enabled);
+        assert_eq!(rules[0].trigger_event, TriggerEvent::Ingest);
+        assert_eq!(rules[0].action_type, ActionType::RunTool);
+        assert_eq!(rules[0].action_config.tool.as_deref(), Some("ocr"));
+
+        let found = db.get_rule_by_name("ocr-pdfs").unwrap();
+        assert!(found.is_some());
+
+        let missing = db.get_rule_by_name("nope").unwrap();
+        assert!(missing.is_none());
+
+        let removed = db.remove_rule("ocr-pdfs").unwrap();
+        assert_eq!(removed, 1);
+        assert!(db.list_rules().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rule_enable_disable() {
+        let (_dir, db) = setup();
+        let rule = make_rule("tag-review", TriggerEvent::Ingest, ActionType::AddTag);
+        db.insert_rule(&rule).unwrap();
+
+        db.set_rule_enabled("tag-review", false).unwrap();
+        let r = db.get_rule_by_name("tag-review").unwrap().unwrap();
+        assert!(!r.enabled);
+
+        db.set_rule_enabled("tag-review", true).unwrap();
+        let r = db.get_rule_by_name("tag-review").unwrap().unwrap();
+        assert!(r.enabled);
+    }
+
+    #[test]
+    fn get_matching_rules_filters_by_event_and_enabled() {
+        let (_dir, db) = setup();
+        let r1 = make_rule("ingest-rule", TriggerEvent::Ingest, ActionType::RunTool);
+        let r2 = make_rule("tag-rule", TriggerEvent::Tag, ActionType::RunTool);
+        db.insert_rule(&r1).unwrap();
+        db.insert_rule(&r2).unwrap();
+
+        let ingest_rules = db.get_matching_rules(TriggerEvent::Ingest).unwrap();
+        assert_eq!(ingest_rules.len(), 1);
+        assert_eq!(ingest_rules[0].name, "ingest-rule");
+
+        let tag_rules = db.get_matching_rules(TriggerEvent::Tag).unwrap();
+        assert_eq!(tag_rules.len(), 1);
+        assert_eq!(tag_rules[0].name, "tag-rule");
+
+        db.set_rule_enabled("ingest-rule", false).unwrap();
+        assert!(db.get_matching_rules(TriggerEvent::Ingest).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rule_with_filter_roundtrip() {
+        let (_dir, db) = setup();
+        let mut rule = make_rule("filtered", TriggerEvent::Ingest, ActionType::RunTool);
+        rule.trigger_filter = TriggerFilter {
+            category: Some("evidence".to_string()),
+            mime_type: Some("application/pdf".to_string()),
+            ..Default::default()
+        };
+        db.insert_rule(&rule).unwrap();
+
+        let found = db.get_rule_by_name("filtered").unwrap().unwrap();
+        assert_eq!(found.trigger_filter.category.as_deref(), Some("evidence"));
+        assert_eq!(
+            found.trigger_filter.mime_type.as_deref(),
+            Some("application/pdf"),
+        );
+        assert!(found.trigger_filter.tag_name.is_none());
+        assert!(found.trigger_filter.file_type.is_none());
+    }
+
+    #[test]
+    fn rule_priority_ordering() {
+        let (_dir, db) = setup();
+        let mut r1 = make_rule("low-priority", TriggerEvent::Ingest, ActionType::RunTool);
+        r1.priority = 10;
+        let mut r2 = make_rule("high-priority", TriggerEvent::Ingest, ActionType::RunTool);
+        r2.priority = 1;
+        db.insert_rule(&r1).unwrap();
+        db.insert_rule(&r2).unwrap();
+
+        let rules = db.get_matching_rules(TriggerEvent::Ingest).unwrap();
+        assert_eq!(rules[0].name, "high-priority");
+        assert_eq!(rules[1].name, "low-priority");
+    }
+
+    #[test]
+    fn rule_duplicate_name_rejected() {
+        let (_dir, db) = setup();
+        let r = make_rule("dup", TriggerEvent::Ingest, ActionType::RunTool);
+        db.insert_rule(&r).unwrap();
+        assert!(db.insert_rule(&r).is_err());
+    }
+
+    #[test]
+    fn rule_remove_nonexistent_returns_zero() {
+        let (_dir, db) = setup();
+        let count = db.remove_rule("ghost").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn rule_set_enabled_nonexistent_returns_zero() {
+        let (_dir, db) = setup();
+        let count = db.set_rule_enabled("ghost", true).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn rule_list_empty() {
+        let (_dir, db) = setup();
+        let rules = db.list_rules().unwrap();
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn rule_with_empty_filter() {
+        let (_dir, db) = setup();
+        let r = make_rule("empty-filter", TriggerEvent::Ingest, ActionType::AddTag);
+        db.insert_rule(&r).unwrap();
+
+        let found = db.get_rule_by_name("empty-filter").unwrap().unwrap();
+        assert!(found.trigger_filter.is_empty());
+    }
+
+    #[test]
+    fn get_matching_rules_wrong_event_returns_empty() {
+        let (_dir, db) = setup();
+        let r = make_rule("ingest-only", TriggerEvent::Ingest, ActionType::RunTool);
+        db.insert_rule(&r).unwrap();
+
+        let rules = db.get_matching_rules(TriggerEvent::Tag).unwrap();
+        assert!(rules.is_empty());
     }
 }
