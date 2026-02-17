@@ -354,24 +354,25 @@ pub enum PipelineCommands {
 }
 
 #[derive(Clone, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum RuleCommands {
     /// Add a new rule
     Add {
         /// Rule name (unique identifier)
         name: String,
-        /// Trigger event: ingest, tag, untag, categorize
+        /// Trigger event: ingest, tag, untag, categorize, sign, state-change, project-enter, workspace-enter
         #[arg(long)]
         on: String,
-        /// Action type: run-tool, add-tag, remove-tag
+        /// Action type: run-tool, add-tag, remove-tag, sign, unsign, attach-pipeline, detach-pipeline
         #[arg(long)]
         action: String,
         /// Tool name (required for run-tool action)
         #[arg(long)]
         tool: Option<String>,
-        /// Tag name (required for add-tag/remove-tag action)
+        /// Tag name (for add-tag/remove-tag action, or attachment scope for attach/detach-pipeline)
         #[arg(long)]
         tag: Option<String>,
-        /// Category filter (only trigger for files in this category)
+        /// Category filter / attachment scope for attach/detach-pipeline
         #[arg(long)]
         category: Option<String>,
         /// MIME type filter (e.g., application/pdf, image/*)
@@ -383,6 +384,21 @@ pub enum RuleCommands {
         /// Tag name that triggers this rule (for tag/untag events)
         #[arg(long = "trigger-tag")]
         trigger_tag: Option<String>,
+        /// Pipeline name filter (for sign/state-change triggers)
+        #[arg(long = "trigger-pipeline")]
+        trigger_pipeline: Option<String>,
+        /// Sign name filter (for sign triggers)
+        #[arg(long = "trigger-sign")]
+        trigger_sign: Option<String>,
+        /// Target state filter (for state-change triggers)
+        #[arg(long = "trigger-state")]
+        trigger_state: Option<String>,
+        /// Pipeline name (for sign/unsign/attach-pipeline/detach-pipeline actions)
+        #[arg(long)]
+        pipeline: Option<String>,
+        /// Sign name (for sign/unsign actions)
+        #[arg(long = "sign-name")]
+        sign_name: Option<String>,
         /// Priority (lower fires first, default 0)
         #[arg(long, default_value = "0")]
         priority: i32,

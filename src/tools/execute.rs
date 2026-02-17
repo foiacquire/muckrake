@@ -10,9 +10,9 @@ use super::{apply_env, build_tool_env};
 
 pub struct ExecuteToolParams<'a> {
     pub tool_name: &'a str,
-    pub file_abs_path: &'a Path,
-    pub file_rel_path: &'a str,
-    pub file_ext: &'a str,
+    pub file_abs_path: Option<&'a Path>,
+    pub file_rel_path: Option<&'a str>,
+    pub file_ext: Option<&'a str>,
     pub tags: &'a [String],
     pub project_root: &'a Path,
     pub project_db: &'a ProjectDb,
@@ -21,12 +21,15 @@ pub struct ExecuteToolParams<'a> {
 }
 
 pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
-    let scope_chain = build_scope_chain(params.file_rel_path);
+    let scope_chain = params
+        .file_rel_path
+        .map(build_scope_chain)
+        .unwrap_or_default();
     let scope_refs: Vec<Option<&str>> = scope_chain.iter().map(|s| s.as_deref()).collect();
 
     let lookup = ToolLookup {
         action: params.tool_name,
-        file_type: params.file_ext,
+        file_type: params.file_ext.unwrap_or("*"),
         scope_chain: &scope_refs,
         tags: params.tags,
     };
@@ -34,9 +37,11 @@ pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
     let candidate = resolve_tool(&lookup, params.project_db, params.workspace_db)?;
     let Some(candidate) = candidate else {
         bail!(
-            "no tool '{}' found for file '{}'",
+            "no tool '{}' found{}",
             params.tool_name,
-            params.file_rel_path
+            params
+                .file_rel_path
+                .map_or(String::new(), |p| format!(" for file '{p}'"))
         );
     };
 
@@ -46,14 +51,24 @@ pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
         candidate.quiet,
     )?;
 
-    let file_path_str = params.file_abs_path.to_string_lossy();
     let mut cmd = Command::new(&candidate.command);
-    cmd.arg(file_path_str.as_ref());
+    if let Some(abs_path) = params.file_abs_path {
+        cmd.arg(abs_path.to_string_lossy().as_ref());
+    }
     apply_env(&mut cmd, &env_map);
     cmd.env("MKRK_PROJECT_ROOT", params.project_root);
     cmd.env("MKRK_PROJECT_DB", params.project_root.join(".mkrk"));
     if let Some(ws_root) = params.workspace_root {
         cmd.env("MKRK_WORKSPACE_ROOT", ws_root);
+    }
+    if let Some(rel_path) = params.file_rel_path {
+        cmd.env("MKRK_FILE_REL_PATH", rel_path);
+    }
+    if let Some(abs_path) = params.file_abs_path {
+        cmd.env("MKRK_FILE_ABS_PATH", abs_path);
+    }
+    if let Some(ext) = params.file_ext {
+        cmd.env("MKRK_FILE_EXT", ext);
     }
 
     let status = cmd.status()?;

@@ -94,11 +94,14 @@ fn walk_dir(
             if let Ok(Some(file)) = project_db.get_file_by_path(&rel_path) {
                 let event = RuleEvent {
                     event: TriggerEvent::Ingest,
-                    file: &file,
-                    file_id,
-                    rel_path: &rel_path,
+                    file: Some(&file),
+                    file_id: Some(file_id),
+                    rel_path: Some(&rel_path),
                     tag_name: None,
                     target_category: None,
+                    pipeline_name: None,
+                    sign_name: None,
+                    new_state: None,
                 };
                 crate::rules::fire_rules(ctx, &event);
             }

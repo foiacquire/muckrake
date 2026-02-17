@@ -8,9 +8,10 @@ use console::style;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::integrity;
-use crate::models::{Category, Pipeline, Sign, TrackedFile};
+use crate::models::{Category, Pipeline, Sign, TrackedFile, TriggerEvent};
 use crate::pipeline::state::derive_file_state;
 use crate::reference::{parse_reference, resolve_references};
+use crate::rules::RuleEvent;
 use crate::util::whoami;
 
 pub fn run_sign(
@@ -47,36 +48,23 @@ pub fn run_sign(
         None
     };
 
-    let sign = Sign {
-        id: None,
-        pipeline_id,
-        file_id,
-        file_hash: current_hash,
-        sign_name: sign_name.to_string(),
-        signer: whoami(),
-        signed_at: Utc::now().to_rfc3339(),
-        signature,
-        revoked_at: None,
-    };
+    let old_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
 
+    let sign = build_sign(pipeline_id, file_id, &current_hash, sign_name, signature);
     project_db.insert_sign(&sign)?;
-    project_db.insert_audit(
-        "sign",
-        Some(file_id),
-        Some(&sign.signer),
-        Some(
-            &serde_json::json!({
-                "pipeline": pipeline.name,
-                "sign_name": sign_name,
-            })
-            .to_string(),
-        ),
-    )?;
+    audit_sign(project_db, file_id, &sign.signer, &pipeline.name, sign_name)?;
 
     eprintln!(
         "Signed '{}' as '{}' in pipeline '{}'",
         file.path, sign_name, pipeline.name
     );
+
+    let new_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+
+    fire_pipeline_rule(&ctx, &file, &pipeline.name, Some(sign_name), &new_state);
+    if old_state != new_state {
+        fire_pipeline_rule(&ctx, &file, &pipeline.name, None, &new_state);
+    }
 
     Ok(())
 }
@@ -88,7 +76,7 @@ pub fn run_unsign(
     pipeline_name: Option<&str>,
 ) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (_, project_db) = ctx.require_project()?;
+    let (project_root, project_db) = ctx.require_project()?;
 
     let parsed = parse_reference(reference)?;
     let collection = resolve_references(&[parsed], &ctx)?;
@@ -114,25 +102,22 @@ pub fn run_unsign(
             )
         })?;
 
+    let current_hash = current_file_hash(project_root, &file);
+    let old_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+
     let now = Utc::now().to_rfc3339();
     project_db.revoke_sign(sign.id.unwrap(), &now)?;
-    project_db.insert_audit(
-        "unsign",
-        Some(file_id),
-        Some(&whoami()),
-        Some(
-            &serde_json::json!({
-                "pipeline": pipeline.name,
-                "sign_name": sign_name,
-            })
-            .to_string(),
-        ),
-    )?;
+    audit_sign(project_db, file_id, &whoami(), &pipeline.name, sign_name)?;
 
     eprintln!(
         "Revoked sign '{}' for '{}' in pipeline '{}'",
         sign_name, file.path, pipeline.name
     );
+
+    let new_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+    if old_state != new_state {
+        fire_pipeline_rule(&ctx, &file, &pipeline.name, None, &new_state);
+    }
 
     Ok(())
 }
@@ -250,7 +235,7 @@ fn current_file_hash(project_root: &Path, file: &TrackedFile) -> String {
 
 fn print_sign_detail(project_db: &ProjectDb, sign: &Sign, file: &TrackedFile) {
     let pipeline = project_db
-        .get_pipeline_by_name("")
+        .get_pipeline_by_id(sign.pipeline_id)
         .ok()
         .flatten()
         .map_or_else(|| format!("pipeline:{}", sign.pipeline_id), |p| p.name);
@@ -348,6 +333,89 @@ fn rehash_file(project_root: &Path, file: &TrackedFile) -> Result<String> {
         bail!("file not found: {}", file.path);
     }
     integrity::hash_file(&file_path)
+}
+
+fn derive_pipeline_state(
+    project_db: &ProjectDb,
+    file_id: i64,
+    pipeline: &Pipeline,
+    current_hash: &str,
+) -> Result<String> {
+    let signs = project_db.get_signs_for_file(file_id)?;
+    let pipeline_signs: Vec<_> = signs
+        .iter()
+        .filter(|s| s.pipeline_id == pipeline.id.unwrap())
+        .cloned()
+        .collect();
+    Ok(derive_file_state(pipeline, &pipeline_signs, current_hash).current_state)
+}
+
+fn fire_pipeline_rule(
+    ctx: &Context,
+    file: &TrackedFile,
+    pipeline_name: &str,
+    sign_name: Option<&str>,
+    new_state: &str,
+) {
+    let event = if sign_name.is_some() {
+        TriggerEvent::Sign
+    } else {
+        TriggerEvent::StateChange
+    };
+    let rule_event = RuleEvent {
+        event,
+        file: Some(file),
+        file_id: file.id,
+        rel_path: Some(&file.path),
+        tag_name: None,
+        target_category: None,
+        pipeline_name: Some(pipeline_name),
+        sign_name,
+        new_state: Some(new_state),
+    };
+    crate::rules::fire_rules(ctx, &rule_event);
+}
+
+fn build_sign(
+    pipeline_id: i64,
+    file_id: i64,
+    current_hash: &str,
+    sign_name: &str,
+    signature: Option<String>,
+) -> Sign {
+    Sign {
+        id: None,
+        pipeline_id,
+        file_id,
+        file_hash: current_hash.to_string(),
+        sign_name: sign_name.to_string(),
+        signer: whoami(),
+        signed_at: Utc::now().to_rfc3339(),
+        signature,
+        revoked_at: None,
+        source: None,
+    }
+}
+
+fn audit_sign(
+    project_db: &ProjectDb,
+    file_id: i64,
+    signer: &str,
+    pipeline_name: &str,
+    sign_name: &str,
+) -> Result<()> {
+    project_db.insert_audit(
+        "sign",
+        Some(file_id),
+        Some(signer),
+        Some(
+            &serde_json::json!({
+                "pipeline": pipeline_name,
+                "sign_name": sign_name,
+            })
+            .to_string(),
+        ),
+    )
 }
 
 fn create_gpg_signature(path: &Path) -> Result<String> {

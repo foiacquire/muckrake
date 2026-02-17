@@ -9,6 +9,7 @@ pub struct Sign {
     pub signed_at: String,
     pub signature: Option<String>,
     pub revoked_at: Option<String>,
+    pub source: Option<String>,
 }
 
 impl Sign {
@@ -36,6 +37,7 @@ mod tests {
             } else {
                 None
             },
+            source: None,
         }
     }
 

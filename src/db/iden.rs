@@ -154,6 +154,7 @@ pub enum Signs {
     SignedAt,
     Signature,
     RevokedAt,
+    Source,
 }
 
 #[derive(Iden)]

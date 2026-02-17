@@ -5,6 +5,7 @@ pub use engine::{evaluate_rules, RuleContext, RuleEvent};
 use std::collections::HashSet;
 
 use crate::context::Context;
+use crate::models::TriggerEvent;
 
 /// Fire rules for a given event without requiring callers to build
 /// [`RuleContext`] / `HashSet` boilerplate.
@@ -21,4 +22,20 @@ pub fn fire_rules(ctx: &Context, event: &RuleEvent<'_>) {
     };
     let mut fired = HashSet::new();
     let _ = evaluate_rules(event, &rule_ctx, &mut fired);
+}
+
+/// Fire a lifecycle event (no file context).
+pub fn fire_lifecycle_rules(ctx: &Context, trigger: TriggerEvent) {
+    let event = RuleEvent {
+        event: trigger,
+        file: None,
+        file_id: None,
+        rel_path: None,
+        tag_name: None,
+        target_category: None,
+        pipeline_name: None,
+        sign_name: None,
+        new_state: None,
+    };
+    fire_rules(ctx, &event);
 }

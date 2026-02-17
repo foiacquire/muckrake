@@ -9,6 +9,7 @@ use muckrake::cli::{
     CategoryCommands, Cli, Commands, InboxCommands, PipelineCommands, RuleCommands, ToolCommands,
 };
 use muckrake::context::{discover, resolve_scope, Context};
+use muckrake::models::TriggerEvent;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -133,6 +134,10 @@ fn rewrite_category_shorthand(args: &mut Vec<String>) {
 
 #[allow(clippy::too_many_lines)]
 fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
+    if !matches!(command, Commands::Init { .. }) {
+        fire_lifecycle_events(cwd);
+    }
+
     match command {
         Commands::Init {
             name,
@@ -336,6 +341,11 @@ fn dispatch_rule(cwd: &Path, command: RuleCommands) -> Result<()> {
             mime_type,
             file_type,
             trigger_tag,
+            trigger_pipeline,
+            trigger_sign,
+            trigger_state,
+            pipeline,
+            sign_name,
             priority,
         } => {
             let params = muckrake::cli::rule::AddRuleParams {
@@ -348,6 +358,11 @@ fn dispatch_rule(cwd: &Path, command: RuleCommands) -> Result<()> {
                 mime_type: mime_type.as_deref(),
                 file_type: file_type.as_deref(),
                 trigger_tag: trigger_tag.as_deref(),
+                trigger_pipeline: trigger_pipeline.as_deref(),
+                trigger_sign: trigger_sign.as_deref(),
+                trigger_state: trigger_state.as_deref(),
+                pipeline: pipeline.as_deref(),
+                sign_name: sign_name.as_deref(),
                 priority,
             };
             muckrake::cli::rule::run_add(cwd, &params)
@@ -357,4 +372,20 @@ fn dispatch_rule(cwd: &Path, command: RuleCommands) -> Result<()> {
         RuleCommands::Enable { name } => muckrake::cli::rule::run_enable(cwd, &name),
         RuleCommands::Disable { name } => muckrake::cli::rule::run_disable(cwd, &name),
     }
+}
+
+fn fire_lifecycle_events(cwd: &Path) {
+    let Ok(ctx) = discover(cwd) else {
+        return;
+    };
+    if ctx.require_project().is_err() {
+        return;
+    }
+    if let Context::Project {
+        workspace: Some(_), ..
+    } = &ctx
+    {
+        muckrake::rules::fire_lifecycle_rules(&ctx, TriggerEvent::WorkspaceEnter);
+    }
+    muckrake::rules::fire_lifecycle_rules(&ctx, TriggerEvent::ProjectEnter);
 }

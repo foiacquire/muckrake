@@ -21,18 +21,12 @@ pub fn run_add(cwd: &Path, params: &AddRuleParams<'_>) -> Result<()> {
         category: params.category.map(String::from),
         mime_type: params.mime_type.map(String::from),
         file_type: params.file_type.map(String::from),
+        pipeline: params.trigger_pipeline.map(String::from),
+        sign_name: params.trigger_sign.map(String::from),
+        state: params.trigger_state.map(String::from),
     };
 
-    let action_config = match action_type {
-        ActionType::RunTool => ActionConfig {
-            tool: Some(params.tool.unwrap_or_default().to_string()),
-            tag: None,
-        },
-        ActionType::AddTag | ActionType::RemoveTag => ActionConfig {
-            tool: None,
-            tag: Some(params.tag.unwrap_or_default().to_string()),
-        },
-    };
+    let action_config = build_action_config(action_type, params);
 
     let rule = Rule {
         id: None,
@@ -134,6 +128,11 @@ pub struct AddRuleParams<'a> {
     pub mime_type: Option<&'a str>,
     pub file_type: Option<&'a str>,
     pub trigger_tag: Option<&'a str>,
+    pub trigger_pipeline: Option<&'a str>,
+    pub trigger_sign: Option<&'a str>,
+    pub trigger_state: Option<&'a str>,
+    pub pipeline: Option<&'a str>,
+    pub sign_name: Option<&'a str>,
     pub priority: i32,
 }
 
@@ -149,13 +148,73 @@ fn validate_action_params(action_type: ActionType, params: &AddRuleParams<'_>) -
                 bail!("--tag is required for {action_type} action");
             }
         }
+        ActionType::Sign | ActionType::Unsign => {
+            if params.pipeline.is_none() {
+                bail!("--pipeline is required for {action_type} action");
+            }
+            if params.sign_name.is_none() {
+                bail!("--sign-name is required for {action_type} action");
+            }
+        }
+        ActionType::AttachPipeline | ActionType::DetachPipeline => {
+            if params.pipeline.is_none() {
+                bail!("--pipeline is required for {action_type} action");
+            }
+            if params.category.is_none() && params.tag.is_none() {
+                bail!(
+                    "--category or --tag is required for {action_type} action (attachment scope)"
+                );
+            }
+        }
     }
     Ok(())
+}
+
+fn build_action_config(action_type: ActionType, params: &AddRuleParams<'_>) -> ActionConfig {
+    let base = ActionConfig {
+        tool: None,
+        tag: None,
+        pipeline: None,
+        sign_name: None,
+        category: None,
+    };
+    match action_type {
+        ActionType::RunTool => ActionConfig {
+            tool: Some(params.tool.unwrap_or_default().to_string()),
+            ..base
+        },
+        ActionType::AddTag | ActionType::RemoveTag => ActionConfig {
+            tag: Some(params.tag.unwrap_or_default().to_string()),
+            ..base
+        },
+        ActionType::Sign | ActionType::Unsign => ActionConfig {
+            pipeline: Some(params.pipeline.unwrap_or_default().to_string()),
+            sign_name: Some(params.sign_name.unwrap_or_default().to_string()),
+            ..base
+        },
+        ActionType::AttachPipeline | ActionType::DetachPipeline => ActionConfig {
+            pipeline: Some(params.pipeline.unwrap_or_default().to_string()),
+            tag: params.tag.map(str::to_string),
+            category: params.category.map(str::to_string),
+            ..base
+        },
+    }
 }
 
 fn action_target(config: &ActionConfig) -> String {
     if let Some(ref tool) = config.tool {
         return tool.clone();
+    }
+    if let Some(ref pipeline) = config.pipeline {
+        if let Some(ref sign) = config.sign_name {
+            return format!("'{sign}' in '{pipeline}'");
+        }
+        let scope = config
+            .category
+            .as_deref()
+            .or(config.tag.as_deref())
+            .unwrap_or("?");
+        return format!("'{pipeline}' on {scope}");
     }
     if let Some(ref tag) = config.tag {
         return format!("'{tag}'");
@@ -180,6 +239,15 @@ fn format_filter(filter: &TriggerFilter) -> String {
     if let Some(ref ft) = filter.file_type {
         parts.push(format!("ext={ft}"));
     }
+    if let Some(ref p) = filter.pipeline {
+        parts.push(format!("pipeline={p}"));
+    }
+    if let Some(ref s) = filter.sign_name {
+        parts.push(format!("sign={s}"));
+    }
+    if let Some(ref st) = filter.state {
+        parts.push(format!("state={st}"));
+    }
     format!("[{}] ", parts.join(", "))
 }
 
@@ -202,6 +270,11 @@ mod tests {
             mime_type: None,
             file_type: None,
             trigger_tag: None,
+            trigger_pipeline: None,
+            trigger_sign: None,
+            trigger_state: None,
+            pipeline: None,
+            sign_name: None,
             priority: 0,
         }
     }
@@ -242,10 +315,50 @@ mod tests {
     }
 
     #[test]
+    fn validate_sign_requires_pipeline_and_sign_name() {
+        let p = params_with("sign", None, None);
+        let err = validate_action_params(ActionType::Sign, &p);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("--pipeline"));
+
+        let mut p2 = params_with("sign", None, None);
+        p2.pipeline = Some("editorial");
+        let err = validate_action_params(ActionType::Sign, &p2);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("--sign-name"));
+
+        let mut p3 = params_with("sign", None, None);
+        p3.pipeline = Some("editorial");
+        p3.sign_name = Some("review");
+        assert!(validate_action_params(ActionType::Sign, &p3).is_ok());
+    }
+
+    #[test]
+    fn validate_attach_pipeline_requires_pipeline_and_scope() {
+        let p = params_with("attach-pipeline", None, None);
+        let err = validate_action_params(ActionType::AttachPipeline, &p);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("--pipeline"));
+
+        let mut p2 = params_with("attach-pipeline", None, None);
+        p2.pipeline = Some("editorial");
+        let err = validate_action_params(ActionType::AttachPipeline, &p2);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("--category or --tag"));
+
+        let mut p3 = params_with("attach-pipeline", None, Some("classified"));
+        p3.pipeline = Some("editorial");
+        assert!(validate_action_params(ActionType::AttachPipeline, &p3).is_ok());
+    }
+
+    #[test]
     fn action_target_tool() {
         let config = ActionConfig {
             tool: Some("ocr".to_string()),
             tag: None,
+            pipeline: None,
+            sign_name: None,
+            category: None,
         };
         assert_eq!(action_target(&config), "ocr");
     }
@@ -255,8 +368,35 @@ mod tests {
         let config = ActionConfig {
             tool: None,
             tag: Some("reviewed".to_string()),
+            pipeline: None,
+            sign_name: None,
+            category: None,
         };
         assert_eq!(action_target(&config), "'reviewed'");
+    }
+
+    #[test]
+    fn action_target_pipeline_sign() {
+        let config = ActionConfig {
+            tool: None,
+            tag: None,
+            pipeline: Some("editorial".to_string()),
+            sign_name: Some("review".to_string()),
+            category: None,
+        };
+        assert_eq!(action_target(&config), "'review' in 'editorial'");
+    }
+
+    #[test]
+    fn action_target_pipeline_scope() {
+        let config = ActionConfig {
+            tool: None,
+            tag: Some("classified".to_string()),
+            pipeline: Some("security".to_string()),
+            sign_name: None,
+            category: None,
+        };
+        assert_eq!(action_target(&config), "'security' on classified");
     }
 
     #[test]
@@ -264,6 +404,9 @@ mod tests {
         let config = ActionConfig {
             tool: None,
             tag: None,
+            pipeline: None,
+            sign_name: None,
+            category: None,
         };
         assert_eq!(action_target(&config), "");
     }
@@ -288,8 +431,8 @@ mod tests {
         let filter = TriggerFilter {
             category: Some("evidence".to_string()),
             mime_type: Some("application/pdf".to_string()),
-            tag_name: None,
             file_type: Some("pdf".to_string()),
+            ..Default::default()
         };
         assert_eq!(
             format_filter(&filter),
@@ -304,11 +447,17 @@ mod tests {
             tag_name: Some("speech".to_string()),
             mime_type: Some("audio/wav".to_string()),
             file_type: Some("wav".to_string()),
+            pipeline: Some("editorial".to_string()),
+            sign_name: Some("review".to_string()),
+            state: Some("reviewed".to_string()),
         };
         let result = format_filter(&filter);
         assert!(result.contains("cat=ev"));
         assert!(result.contains("tag=speech"));
         assert!(result.contains("mime=audio/wav"));
         assert!(result.contains("ext=wav"));
+        assert!(result.contains("pipeline=editorial"));
+        assert!(result.contains("sign=review"));
+        assert!(result.contains("state=reviewed"));
     }
 }

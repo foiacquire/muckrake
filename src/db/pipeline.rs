@@ -38,6 +38,20 @@ pub fn get_pipeline_by_name(conn: &Connection, name: &str) -> Result<Option<Pipe
     }
 }
 
+pub fn get_pipeline_by_id(conn: &Connection, id: i64) -> Result<Option<Pipeline>> {
+    let (sql, values) = Query::select()
+        .columns(PIPELINE_COLUMNS)
+        .from(Pipelines::Table)
+        .and_where(Expr::col(Pipelines::Id).eq(id))
+        .build_rusqlite(SqliteQueryBuilder);
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query_map(&*values.as_params(), row_to_pipeline)?;
+    match rows.next() {
+        Some(row) => Ok(Some(row?)),
+        None => Ok(None),
+    }
+}
+
 pub fn list_pipelines(conn: &Connection) -> Result<Vec<Pipeline>> {
     let (sql, values) = Query::select()
         .columns(PIPELINE_COLUMNS)
@@ -227,6 +241,7 @@ pub fn insert_sign(conn: &Connection, sign: &Sign) -> Result<i64> {
             Signs::Signer,
             Signs::SignedAt,
             Signs::Signature,
+            Signs::Source,
         ])
         .values_panic([
             sign.pipeline_id.into(),
@@ -236,6 +251,7 @@ pub fn insert_sign(conn: &Connection, sign: &Sign) -> Result<i64> {
             sign.signer.as_str().into(),
             sign.signed_at.as_str().into(),
             sign.signature.clone().into(),
+            sign.source.clone().into(),
         ])
         .build_rusqlite(SqliteQueryBuilder);
     conn.execute(&sql, &*values.as_params())?;
@@ -322,6 +338,7 @@ pub fn sign_count(conn: &Connection) -> Result<i64> {
 pub fn migrate_pipeline_tables(conn: &Connection) -> Result<()> {
     let has_table = conn.prepare("SELECT id FROM pipelines LIMIT 0").is_ok();
     if has_table {
+        migrate_signs_source_column(conn)?;
         return Ok(());
     }
     conn.execute_batch(
@@ -347,9 +364,19 @@ pub fn migrate_pipeline_tables(conn: &Connection) -> Result<()> {
             signer TEXT NOT NULL,
             signed_at TEXT NOT NULL,
             signature TEXT,
-            revoked_at TEXT
+            revoked_at TEXT,
+            source TEXT
         );",
     )?;
+    Ok(())
+}
+
+fn migrate_signs_source_column(conn: &Connection) -> Result<()> {
+    let has_source = conn.prepare("SELECT source FROM signs LIMIT 0").is_ok();
+    if has_source {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE signs ADD COLUMN source TEXT;")?;
     Ok(())
 }
 
@@ -433,7 +460,7 @@ const ATTACHMENT_COLUMNS: [PipelineAttachments; 4] = [
     PipelineAttachments::ScopeValue,
 ];
 
-const SIGN_COLUMNS: [Signs; 9] = [
+const SIGN_COLUMNS: [Signs; 10] = [
     Signs::Id,
     Signs::PipelineId,
     Signs::FileId,
@@ -443,6 +470,7 @@ const SIGN_COLUMNS: [Signs; 9] = [
     Signs::SignedAt,
     Signs::Signature,
     Signs::RevokedAt,
+    Signs::Source,
 ];
 
 fn col_conversion_err(col: usize, e: impl std::fmt::Display) -> rusqlite::Error {
@@ -496,6 +524,7 @@ fn row_to_sign(row: &rusqlite::Row) -> rusqlite::Result<Sign> {
         signed_at: row.get(6)?,
         signature: row.get(7)?,
         revoked_at: row.get(8)?,
+        source: row.get(9)?,
     })
 }
 
@@ -633,6 +662,7 @@ mod tests {
             signed_at: "2025-06-01T00:00:00Z".to_string(),
             signature: None,
             revoked_at: None,
+            source: None,
         };
         let sid = db.insert_sign(&sign).unwrap();
         assert!(sid > 0);
@@ -672,6 +702,7 @@ mod tests {
             signed_at: "2025-06-01T00:00:00Z".to_string(),
             signature: None,
             revoked_at: None,
+            source: None,
         };
         let sid = db.insert_sign(&sign).unwrap();
 
@@ -708,6 +739,7 @@ mod tests {
             signed_at: "2025-06-01T00:00:00Z".to_string(),
             signature: None,
             revoked_at: None,
+            source: None,
         };
         db.insert_sign(&sign1).unwrap();
 
@@ -740,6 +772,7 @@ mod tests {
             signed_at: "2025-06-01T00:00:00Z".to_string(),
             signature: None,
             revoked_at: None,
+            source: None,
         };
         db.insert_sign(&sign).unwrap();
 

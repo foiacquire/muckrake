@@ -786,6 +786,10 @@ impl ProjectDb {
         super::pipeline::get_pipeline_by_name(&self.conn, name)
     }
 
+    pub fn get_pipeline_by_id(&self, id: i64) -> Result<Option<Pipeline>> {
+        super::pipeline::get_pipeline_by_id(&self.conn, id)
+    }
+
     pub fn list_pipelines(&self) -> Result<Vec<Pipeline>> {
         super::pipeline::list_pipelines(&self.conn)
     }
@@ -1842,6 +1846,9 @@ mod tests {
             action_config: ActionConfig {
                 tool: Some("ocr".to_string()),
                 tag: None,
+                pipeline: None,
+                sign_name: None,
+                category: None,
             },
             priority: 0,
             created_at: "2025-01-01T00:00:00Z".to_string(),

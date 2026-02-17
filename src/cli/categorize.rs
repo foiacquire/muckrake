@@ -62,11 +62,14 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
 
     let event = RuleEvent {
         event: TriggerEvent::Categorize,
-        file: &file,
-        file_id,
-        rel_path: &new_rel_path,
+        file: Some(&file),
+        file_id: Some(file_id),
+        rel_path: Some(&new_rel_path),
         tag_name: None,
         target_category: Some(category),
+        pipeline_name: None,
+        sign_name: None,
+        new_state: None,
     };
     crate::rules::fire_rules(&ctx, &event);
 

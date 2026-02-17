@@ -19,11 +19,14 @@ fn fire_tag_event(
 ) {
     let event = RuleEvent {
         event: trigger,
-        file,
-        file_id,
-        rel_path: &file.path,
+        file: Some(file),
+        file_id: Some(file_id),
+        rel_path: Some(&file.path),
         tag_name: Some(tag),
         target_category: None,
+        pipeline_name: None,
+        sign_name: None,
+        new_state: None,
     };
     crate::rules::fire_rules(ctx, &event);
 }
