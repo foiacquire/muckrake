@@ -6,6 +6,8 @@ use crate::db::{ProjectDb, WorkspaceDb};
 use crate::models::{Category, CategoryType, ProtectionLevel};
 use crate::reference::validate_name;
 
+use super::create_category_dir;
+
 const DEFAULT_CATEGORIES: &[(&str, &str, &str, &str, &str)] = &[
     (
         "evidence",
@@ -63,6 +65,7 @@ pub fn run_init_project(
     for (cat, level) in &items {
         let cat_id = project_db.insert_category(cat)?;
         project_db.insert_category_policy(cat_id, level)?;
+        create_category_dir(&project_dir, &cat.pattern);
     }
 
     register_in_workspace(&project_dir)?;
@@ -188,18 +191,22 @@ fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<(Category, Protectio
     Ok(None)
 }
 
+fn category_from_default(name: &str, pattern: &str, cat_type: &str, desc: &str) -> Category {
+    Category {
+        id: None,
+        name: name.to_string(),
+        pattern: pattern.to_string(),
+        category_type: cat_type.parse().expect("invalid default category type"),
+        description: Some(desc.to_string()),
+    }
+}
+
 fn default_categories_with_policies() -> Vec<(Category, ProtectionLevel)> {
     DEFAULT_CATEGORIES
         .iter()
         .map(|(name, pattern, cat_type, level, desc)| {
             (
-                Category {
-                    id: None,
-                    name: (*name).to_string(),
-                    pattern: (*pattern).to_string(),
-                    category_type: cat_type.parse().expect("invalid default category type"),
-                    description: Some((*desc).to_string()),
-                },
+                category_from_default(name, pattern, cat_type, desc),
                 level.parse().expect("invalid default protection level"),
             )
         })
@@ -263,13 +270,7 @@ pub fn run_init_workspace(
 
     if !no_categories {
         for (name, pattern, cat_type, level, desc) in DEFAULT_CATEGORIES {
-            let cat = Category {
-                id: None,
-                name: (*name).to_string(),
-                pattern: (*pattern).to_string(),
-                category_type: cat_type.parse().expect("invalid default category type"),
-                description: Some((*desc).to_string()),
-            };
+            let cat = category_from_default(name, pattern, cat_type, desc);
             let cat_id = ws_db.insert_default_category(&cat)?;
             ws_db.insert_default_category_policy(
                 cat_id,

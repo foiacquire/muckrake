@@ -13,7 +13,22 @@ pub mod tool;
 pub mod verify;
 pub mod view;
 
+use std::path::Path;
+
 use clap::{Parser, Subcommand};
+
+use crate::models::Category;
+
+pub(crate) fn create_category_dir(project_root: &Path, pattern: &str) {
+    let base = Category::name_from_pattern(pattern);
+    if base.is_empty() || base == "**" || base == "*" {
+        return;
+    }
+    let dir = project_root.join(&base);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("  warning: could not create {}: {e}", dir.display());
+    }
+}
 
 #[derive(Parser)]
 #[command(

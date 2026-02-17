@@ -8,12 +8,24 @@ use crate::db::ProjectDb;
 use crate::models::{Category, CategoryType, ProtectionLevel};
 use crate::reference::validate_name;
 
+use super::create_category_dir;
+
 /// Resolve a category by name first, then fall back to pattern match.
 fn find_category(db: &ProjectDb, input: &str) -> Result<Option<Category>> {
     if let Some(cat) = db.get_category_by_name(input)? {
         return Ok(Some(cat));
     }
     db.get_category_by_pattern(input)
+}
+
+/// Find a category by name/pattern and extract its id, or bail with a clear error.
+fn require_category(db: &ProjectDb, name: &str) -> Result<(Category, i64)> {
+    let cat =
+        find_category(db, name)?.ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
+    let cat_id = cat
+        .id
+        .ok_or_else(|| anyhow::anyhow!("category has no id"))?;
+    Ok((cat, cat_id))
 }
 
 pub fn run_list(cwd: &Path) -> Result<()> {
@@ -64,7 +76,7 @@ pub struct AddCategoryParams<'a> {
 
 pub fn run_add(cwd: &Path, params: &AddCategoryParams<'_>) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (_, project_db) = ctx.require_project()?;
+    let (project_root, project_db) = ctx.require_project()?;
 
     let name = params.name;
     validate_name(name)?;
@@ -90,6 +102,7 @@ pub fn run_add(cwd: &Path, params: &AddCategoryParams<'_>) -> Result<()> {
 
     let cat_id = project_db.insert_category(&cat)?;
     project_db.insert_category_policy(cat_id, &level)?;
+    create_category_dir(project_root, &cat.pattern);
 
     eprintln!("Added category '{}' ({level})", cat.name);
     Ok(())
@@ -103,12 +116,7 @@ pub fn run_update(
 ) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
-
-    let cat = find_category(project_db, name)?
-        .ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
-    let cat_id = cat
-        .id
-        .ok_or_else(|| anyhow::anyhow!("category has no id"))?;
+    let (cat, cat_id) = require_category(project_db, name)?;
 
     if new_pattern.is_none() && protection.is_none() {
         bail!("nothing to update — specify --pattern or --protection");
@@ -131,12 +139,7 @@ pub fn run_update(
 pub fn run_remove(cwd: &Path, name: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
-
-    let cat = find_category(project_db, name)?
-        .ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
-    let cat_id = cat
-        .id
-        .ok_or_else(|| anyhow::anyhow!("category has no id"))?;
+    let (cat, cat_id) = require_category(project_db, name)?;
 
     project_db.remove_category(cat_id)?;
     eprintln!("Removed category '{}'", cat.name);
