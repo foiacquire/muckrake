@@ -129,52 +129,83 @@ fn check_immutable_flag(
     project_db: &ProjectDb,
 ) -> Result<u32> {
     let expected = project_db.resolve_protection(&file.path)?;
-    let file_exists = file_path.exists();
     let file_id = file.id.unwrap_or(0);
-    let mut fixed = 0u32;
 
     if expected == ProtectionLevel::Immutable {
-        if file_exists && !integrity::is_immutable(file_path)? {
-            match integrity::set_immutable(file_path) {
-                Ok(()) => {
-                    eprintln!("  {} {} restored immutable flag", style("+").cyan(), file.path);
-                    if !file.immutable {
-                        project_db.update_file_immutable(file_id, true)?;
-                    }
-                    fixed += 1;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "  {} {} failed to restore immutable flag: {e}",
-                        style("!").yellow(),
-                        file.path
-                    );
-                }
-            }
-        } else if file_exists && !file.immutable {
-            project_db.update_file_immutable(file_id, true)?;
-            eprintln!("  {} {} synced immutable flag to db", style("+").cyan(), file.path);
-            fixed += 1;
-        }
+        ensure_immutable(file, file_path, file_id, project_db)
     } else if file.immutable {
-        if file_exists {
-            if let Err(e) = integrity::clear_immutable(file_path) {
+        clear_unexpected_immutable(file, file_path, file_id, expected, project_db)
+    } else {
+        Ok(0)
+    }
+}
+
+fn ensure_immutable(
+    file: &TrackedFile,
+    file_path: &Path,
+    file_id: i64,
+    project_db: &ProjectDb,
+) -> Result<u32> {
+    if !file_path.exists() {
+        return Ok(0);
+    }
+
+    if !integrity::is_immutable(file_path)? {
+        match integrity::set_immutable(file_path) {
+            Ok(()) => {
                 eprintln!(
-                    "  {} {} failed to clear immutable flag: {e}",
+                    "  {} {} restored immutable flag",
+                    style("+").cyan(),
+                    file.path
+                );
+                if !file.immutable {
+                    project_db.update_file_immutable(file_id, true)?;
+                }
+                return Ok(1);
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} {} failed to restore immutable flag: {e}",
                     style("!").yellow(),
                     file.path
                 );
-                return Ok(fixed);
             }
         }
-        project_db.update_file_immutable(file_id, false)?;
+    } else if !file.immutable {
+        project_db.update_file_immutable(file_id, true)?;
         eprintln!(
-            "  {} {} cleared immutable flag (policy: {expected})",
+            "  {} {} synced immutable flag to db",
             style("+").cyan(),
             file.path
         );
-        fixed += 1;
+        return Ok(1);
     }
 
-    Ok(fixed)
+    Ok(0)
+}
+
+fn clear_unexpected_immutable(
+    file: &TrackedFile,
+    file_path: &Path,
+    file_id: i64,
+    expected: ProtectionLevel,
+    project_db: &ProjectDb,
+) -> Result<u32> {
+    if file_path.exists() {
+        if let Err(e) = integrity::clear_immutable(file_path) {
+            eprintln!(
+                "  {} {} failed to clear immutable flag: {e}",
+                style("!").yellow(),
+                file.path
+            );
+            return Ok(0);
+        }
+    }
+    project_db.update_file_immutable(file_id, false)?;
+    eprintln!(
+        "  {} {} cleared immutable flag (policy: {expected})",
+        style("+").cyan(),
+        file.path
+    );
+    Ok(1)
 }

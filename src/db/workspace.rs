@@ -25,7 +25,7 @@ impl WorkspaceDb {
     pub fn create(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to create workspace db at {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        super::configure_conn(&conn)
             .with_context(|| format!("failed to configure workspace db at {}", path.display()))?;
         conn.execute_batch(&WORKSPACE_SCHEMA)?;
         migrate(&conn)?;
@@ -38,7 +38,7 @@ impl WorkspaceDb {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open workspace db at {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        super::configure_conn(&conn)
             .with_context(|| format!("failed to configure workspace db at {}", path.display()))?;
         migrate(&conn)?;
         Ok(Self { conn })
@@ -624,6 +624,16 @@ mod tests {
         (dir, db)
     }
 
+    fn make_test_category(name: &str, pattern: &str) -> Category {
+        Category {
+            id: None,
+            name: name.to_string(),
+            pattern: pattern.to_string(),
+            category_type: CategoryType::Files,
+            description: None,
+        }
+    }
+
     #[test]
     fn create_and_open() {
         let dir = TempDir::new().unwrap();
@@ -659,32 +669,24 @@ mod tests {
         assert_eq!(found.path, "projects/bailey");
     }
 
-    #[test]
-    fn default_categories() {
-        let (_dir, db) = setup();
+    fn insert_evidence_and_notes(db: &WorkspaceDb) {
         let id1 = db
-            .insert_default_category(&Category {
-                id: None,
-                name: "evidence".to_string(),
-                pattern: "evidence/**".to_string(),
-                category_type: CategoryType::Files,
-                description: Some("Evidence".to_string()),
-            })
+            .insert_default_category(&make_test_category("evidence", "evidence/**"))
             .unwrap();
         db.insert_default_category_policy(id1, &ProtectionLevel::Immutable)
             .unwrap();
 
         let id2 = db
-            .insert_default_category(&Category {
-                id: None,
-                name: "notes".to_string(),
-                pattern: "notes/**".to_string(),
-                category_type: CategoryType::Files,
-                description: Some("Notes".to_string()),
-            })
+            .insert_default_category(&make_test_category("notes", "notes/**"))
             .unwrap();
         db.insert_default_category_policy(id2, &ProtectionLevel::Editable)
             .unwrap();
+    }
+
+    #[test]
+    fn default_categories() {
+        let (_dir, db) = setup();
+        insert_evidence_and_notes(&db);
 
         let cats = db.list_default_categories().unwrap();
         assert_eq!(cats.len(), 2);
@@ -695,13 +697,7 @@ mod tests {
     fn default_category_policy_crud() {
         let (_dir, db) = setup();
         let cat_id = db
-            .insert_default_category(&Category {
-                id: None,
-                name: "docs".to_string(),
-                pattern: "docs/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_default_category(&make_test_category("docs", "docs/**"))
             .unwrap();
 
         assert_eq!(db.get_default_category_policy(cat_id).unwrap(), None);
@@ -724,29 +720,7 @@ mod tests {
     #[test]
     fn list_with_policies() {
         let (_dir, db) = setup();
-        let id1 = db
-            .insert_default_category(&Category {
-                id: None,
-                name: "evidence".to_string(),
-                pattern: "evidence/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
-            .unwrap();
-        db.insert_default_category_policy(id1, &ProtectionLevel::Immutable)
-            .unwrap();
-
-        let id2 = db
-            .insert_default_category(&Category {
-                id: None,
-                name: "notes".to_string(),
-                pattern: "notes/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
-            .unwrap();
-        db.insert_default_category_policy(id2, &ProtectionLevel::Editable)
-            .unwrap();
+        insert_evidence_and_notes(&db);
 
         let with_policies = db.list_default_categories_with_policies().unwrap();
         assert_eq!(with_policies.len(), 2);
@@ -759,57 +733,62 @@ mod tests {
     #[test]
     fn list_with_policies_no_policy_defaults_editable() {
         let (_dir, db) = setup();
-        db.insert_default_category(&Category {
-            id: None,
-            name: "stuff".to_string(),
-            pattern: "stuff/**".to_string(),
-            category_type: CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        db.insert_default_category(&make_test_category("stuff", "stuff/**"))
+            .unwrap();
 
         let with_policies = db.list_default_categories_with_policies().unwrap();
         assert_eq!(with_policies.len(), 1);
         assert_eq!(with_policies[0].1, ProtectionLevel::Editable);
     }
 
-    #[test]
-    fn migrate_adds_category_type_column() {
+    fn reopen_and_list_categories(
+        conn: Connection,
+        db_path: &std::path::Path,
+    ) -> (WorkspaceDb, Vec<Category>) {
+        drop(conn);
+        let db = WorkspaceDb::open(db_path).unwrap();
+        let cats = db.list_default_categories().unwrap();
+        (db, cats)
+    }
+
+    fn setup_old_schema(old_categories: &str) -> (TempDir, std::path::PathBuf, Connection) {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join(".mksp");
+        let old_schema = format!("{OLD_SCHEMA_BASE}{old_categories}");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .unwrap();
+        conn.execute_batch(&old_schema).unwrap();
+        (dir, db_path, conn)
+    }
 
-        let old_categories = "
+    #[test]
+    fn migrate_adds_category_type_column() {
+        let (_dir, db_path, conn) = setup_old_schema(
+            "
             CREATE TABLE IF NOT EXISTS default_categories (
                 id INTEGER PRIMARY KEY,
                 pattern TEXT NOT NULL UNIQUE,
                 protection_level TEXT NOT NULL,
                 description TEXT
             );
-        ";
-        let old_schema = format!("{OLD_SCHEMA_BASE}{old_categories}");
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .unwrap();
-        conn.execute_batch(&old_schema).unwrap();
+        ",
+        );
         conn.execute(
             "INSERT INTO default_categories (pattern, protection_level, description) VALUES (?1, ?2, ?3)",
             rusqlite::params!["evidence/**", "immutable", "Evidence"],
         )
         .unwrap();
-        drop(conn);
 
-        let db = WorkspaceDb::open(&db_path).unwrap();
-        let cats = db.list_default_categories().unwrap();
+        let (_db, cats) = reopen_and_list_categories(conn, &db_path);
         assert_eq!(cats.len(), 1);
         assert_eq!(cats[0].category_type, CategoryType::Files);
     }
 
     #[test]
     fn default_policy_migration() {
-        let dir = TempDir::new().unwrap();
-        let db_path = dir.path().join(".mksp");
-
-        let old_categories = "
+        let (_dir, db_path, conn) = setup_old_schema(
+            "
             CREATE TABLE IF NOT EXISTS default_categories (
                 id INTEGER PRIMARY KEY,
                 pattern TEXT NOT NULL UNIQUE,
@@ -817,12 +796,8 @@ mod tests {
                 protection_level TEXT NOT NULL,
                 description TEXT
             );
-        ";
-        let old_schema = format!("{OLD_SCHEMA_BASE}{old_categories}");
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .unwrap();
-        conn.execute_batch(&old_schema).unwrap();
+        ",
+        );
         conn.execute(
             "INSERT INTO default_categories (pattern, category_type, protection_level, description) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params!["evidence/**", "files", "immutable", "Evidence"],
@@ -833,10 +808,8 @@ mod tests {
             rusqlite::params!["notes/**", "files", "protected", "Notes"],
         )
         .unwrap();
-        drop(conn);
 
-        let db = WorkspaceDb::open(&db_path).unwrap();
-        let cats = db.list_default_categories().unwrap();
+        let (db, cats) = reopen_and_list_categories(conn, &db_path);
         assert_eq!(cats.len(), 2);
 
         let ev_id = cats

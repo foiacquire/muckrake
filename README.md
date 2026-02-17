@@ -1,5 +1,10 @@
 # muckrake
 
+**IMPORTANT:** This project is pre-stable. It is pre-alpha software. It is
+designed as much as possible to respect and even reinforce the safety of your
+data. With that sai,d bugs will exist. Do NOT use it on mission critical data
+without backups. It is not stable enough to recommend without backups.
+
 Chain-of-custody research management CLI for investigative journalism.
 
 `mkrk` tracks files, enforces integrity, and organizes evidence across projects

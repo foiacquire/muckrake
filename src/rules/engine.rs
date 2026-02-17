@@ -165,6 +165,24 @@ fn action_run_tool(rule: &Rule, event: &RuleEvent<'_>, ctx: &RuleContext<'_>) ->
     execute_tool(&params)
 }
 
+fn cascade_tag_event(
+    event: &RuleEvent<'_>,
+    trigger: TriggerEvent,
+    tag: &str,
+    ctx: &RuleContext<'_>,
+    fired: &mut HashSet<i64>,
+) -> Result<()> {
+    let cascaded = RuleEvent {
+        event: trigger,
+        file: event.file,
+        file_id: event.file_id,
+        rel_path: event.rel_path,
+        tag_name: Some(tag),
+        target_category: None,
+    };
+    evaluate_rules(&cascaded, ctx, fired)
+}
+
 fn action_add_tag(
     rule: &Rule,
     event: &RuleEvent<'_>,
@@ -176,16 +194,7 @@ fn action_add_tag(
     let hash = integrity::hash_file(&abs_path)?;
     ctx.project_db.insert_tag(event.file_id, tag, &hash)?;
     eprintln!("    tagged '{}' with '{tag}'", event.file.name);
-
-    let tag_event = RuleEvent {
-        event: TriggerEvent::Tag,
-        file: event.file,
-        file_id: event.file_id,
-        rel_path: event.rel_path,
-        tag_name: Some(tag),
-        target_category: None,
-    };
-    evaluate_rules(&tag_event, ctx, fired)
+    cascade_tag_event(event, TriggerEvent::Tag, tag, ctx, fired)
 }
 
 fn action_remove_tag(
@@ -197,21 +206,122 @@ fn action_remove_tag(
     let tag = rule.action_config.tag.as_deref().unwrap_or("unknown");
     ctx.project_db.remove_tag(event.file_id, tag)?;
     eprintln!("    untagged '{}' from '{tag}'", event.file.name);
-
-    let untag_event = RuleEvent {
-        event: TriggerEvent::Untag,
-        file: event.file,
-        file_id: event.file_id,
-        rel_path: event.rel_path,
-        tag_name: Some(tag),
-        target_category: None,
-    };
-    evaluate_rules(&untag_event, ctx, fired)
+    cascade_tag_event(event, TriggerEvent::Untag, tag, ctx, fired)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ActionConfig;
+
+    fn setup_db() -> (tempfile::TempDir, ProjectDb) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        (dir, db)
+    }
+
+    fn make_test_file(name: &str, path: &str, mime_type: Option<&str>) -> TrackedFile {
+        TrackedFile {
+            id: Some(1),
+            name: name.to_string(),
+            path: path.to_string(),
+            sha256: None,
+            mime_type: mime_type.map(String::from),
+            size: None,
+            ingested_at: String::new(),
+            provenance: None,
+            immutable: false,
+        }
+    }
+
+    fn make_event<'a>(
+        file: &'a TrackedFile,
+        file_id: i64,
+        rel_path: &'a str,
+        event: TriggerEvent,
+        tag_name: Option<&'a str>,
+    ) -> RuleEvent<'a> {
+        RuleEvent {
+            event,
+            file,
+            file_id,
+            rel_path,
+            tag_name,
+            target_category: None,
+        }
+    }
+
+    fn make_db_file(name: &str, path: &str, mime_type: Option<&str>, size: i64) -> TrackedFile {
+        TrackedFile {
+            id: None,
+            name: name.to_string(),
+            path: path.to_string(),
+            sha256: None,
+            mime_type: mime_type.map(String::from),
+            size: Some(size),
+            ingested_at: String::new(),
+            provenance: None,
+            immutable: false,
+        }
+    }
+
+    fn tag_action(tag: &str) -> ActionConfig {
+        ActionConfig {
+            tool: None,
+            tag: Some(tag.to_string()),
+        }
+    }
+
+    fn make_rule(
+        name: &str,
+        trigger: TriggerEvent,
+        action_type: ActionType,
+        action_config: ActionConfig,
+    ) -> Rule {
+        Rule {
+            id: None,
+            name: name.to_string(),
+            enabled: true,
+            trigger_event: trigger,
+            trigger_filter: TriggerFilter::default(),
+            action_type,
+            action_config,
+            priority: 0,
+            created_at: String::new(),
+        }
+    }
+
+    fn make_ctx<'a>(dir: &'a tempfile::TempDir, db: &'a ProjectDb) -> RuleContext<'a> {
+        RuleContext {
+            project_root: dir.path(),
+            project_db: db,
+            workspace_root: None,
+            workspace_db: None,
+        }
+    }
+
+    fn setup_file_env_with(
+        name: &str,
+        content: &[u8],
+        mime: Option<&str>,
+    ) -> (tempfile::TempDir, ProjectDb, i64) {
+        let (dir, db) = setup_db();
+        std::fs::write(dir.path().join(name), content).unwrap();
+        let tracked = make_db_file(name, name, mime, content.len() as i64);
+        let file_id = db.insert_file(&tracked).unwrap();
+        (dir, db, file_id)
+    }
+
+    fn run_rule_eval(
+        dir: &tempfile::TempDir,
+        db: &ProjectDb,
+        event: &RuleEvent<'_>,
+    ) -> HashSet<i64> {
+        let ctx = make_ctx(dir, db);
+        let mut fired = HashSet::new();
+        evaluate_rules(event, &ctx, &mut fired).unwrap();
+        fired
+    }
 
     #[test]
     fn mime_exact_match() {
@@ -242,27 +352,9 @@ mod tests {
     #[test]
     fn filter_empty_matches_everything() {
         let filter = TriggerFilter::default();
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: Some("application/pdf".to_string()),
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let file = make_test_file("test.pdf", "evidence/test.pdf", Some("application/pdf"));
+        let event = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
+        let (_dir, db) = setup_db();
         assert!(matches_filter(&filter, &event, &db));
     }
 
@@ -272,49 +364,27 @@ mod tests {
             mime_type: Some("application/pdf".to_string()),
             ..Default::default()
         };
-        let pdf_file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: Some("application/pdf".to_string()),
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let wav_file = TrackedFile {
-            id: Some(2),
-            name: "test.wav".to_string(),
-            path: "evidence/test.wav".to_string(),
-            sha256: None,
-            mime_type: Some("audio/wav".to_string()),
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let pdf_file = make_test_file("test.pdf", "evidence/test.pdf", Some("application/pdf"));
+        let mut wav_file = make_test_file("test.wav", "evidence/test.wav", Some("audio/wav"));
+        wav_file.id = Some(2);
+        let (_dir, db) = setup_db();
 
-        let event_pdf = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &pdf_file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event_pdf = make_event(
+            &pdf_file,
+            1,
+            "evidence/test.pdf",
+            TriggerEvent::Ingest,
+            None,
+        );
         assert!(matches_filter(&filter, &event_pdf, &db));
 
-        let event_wav = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &wav_file,
-            file_id: 2,
-            rel_path: "evidence/test.wav",
-            tag_name: None,
-            target_category: None,
-        };
+        let event_wav = make_event(
+            &wav_file,
+            2,
+            "evidence/test.wav",
+            TriggerEvent::Ingest,
+            None,
+        );
         assert!(!matches_filter(&filter, &event_wav, &db));
     }
 
@@ -324,38 +394,13 @@ mod tests {
             file_type: Some("pdf".to_string()),
             ..Default::default()
         };
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let file = make_test_file("test.pdf", "evidence/test.pdf", None);
+        let (_dir, db) = setup_db();
 
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
         assert!(matches_filter(&filter, &event, &db));
 
-        let event_wav = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.wav",
-            tag_name: None,
-            target_category: None,
-        };
+        let event_wav = make_event(&file, 1, "evidence/test.wav", TriggerEvent::Ingest, None);
         assert!(!matches_filter(&filter, &event_wav, &db));
     }
 
@@ -365,38 +410,25 @@ mod tests {
             tag_name: Some("speech".to_string()),
             ..Default::default()
         };
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.wav".to_string(),
-            path: "evidence/test.wav".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let file = make_test_file("test.wav", "evidence/test.wav", None);
+        let (_dir, db) = setup_db();
 
-        let event_match = RuleEvent {
-            event: TriggerEvent::Tag,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.wav",
-            tag_name: Some("speech"),
-            target_category: None,
-        };
+        let event_match = make_event(
+            &file,
+            1,
+            "evidence/test.wav",
+            TriggerEvent::Tag,
+            Some("speech"),
+        );
         assert!(matches_filter(&filter, &event_match, &db));
 
-        let event_no_match = RuleEvent {
-            event: TriggerEvent::Tag,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.wav",
-            tag_name: Some("other"),
-            target_category: None,
-        };
+        let event_no_match = make_event(
+            &file,
+            1,
+            "evidence/test.wav",
+            TriggerEvent::Tag,
+            Some("other"),
+        );
         assert!(!matches_filter(&filter, &event_no_match, &db));
     }
 
@@ -404,8 +436,7 @@ mod tests {
     fn filter_category() {
         use crate::models::{Category, CategoryType};
 
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let (_dir, db) = setup_db();
         db.insert_category(&Category {
             id: None,
             name: "evidence".to_string(),
@@ -419,36 +450,12 @@ mod tests {
             category: Some("evidence".to_string()),
             ..Default::default()
         };
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
+        let file = make_test_file("test.pdf", "evidence/test.pdf", None);
 
-        let event_in_cat = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event_in_cat = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
         assert!(matches_filter(&filter, &event_in_cat, &db));
 
-        let event_outside = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "notes/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event_outside = make_event(&file, 1, "notes/test.pdf", TriggerEvent::Ingest, None);
         assert!(!matches_filter(&filter, &event_outside, &db));
     }
 
@@ -459,39 +466,14 @@ mod tests {
             file_type: Some("pdf".to_string()),
             ..Default::default()
         };
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: Some("application/pdf".to_string()),
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let file = make_test_file("test.pdf", "evidence/test.pdf", Some("application/pdf"));
+        let (_dir, db) = setup_db();
 
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
         assert!(matches_filter(&filter, &event, &db));
 
         // Right mime, wrong extension — AND fails
-        let event_wrong_ext = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.txt",
-            tag_name: None,
-            target_category: None,
-        };
+        let event_wrong_ext = make_event(&file, 1, "evidence/test.txt", TriggerEvent::Ingest, None);
         assert!(!matches_filter(&filter, &event_wrong_ext, &db));
     }
 
@@ -501,28 +483,10 @@ mod tests {
             category: Some("nonexistent".to_string()),
             ..Default::default()
         };
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let file = make_test_file("test.pdf", "evidence/test.pdf", None);
+        let (_dir, db) = setup_db();
 
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
         assert!(!matches_filter(&filter, &event, &db));
     }
 
@@ -532,135 +496,40 @@ mod tests {
             mime_type: Some("application/pdf".to_string()),
             ..Default::default()
         };
-        let file = TrackedFile {
-            id: Some(1),
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
+        let file = make_test_file("test.pdf", "evidence/test.pdf", None);
+        let (_dir, db) = setup_db();
 
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
+        let event = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
         // File has no mime_type, so filter should reject
         assert!(!matches_filter(&filter, &event, &db));
     }
 
-    fn make_test_file(name: &str, path: &str) -> TrackedFile {
-        TrackedFile {
-            id: Some(1),
-            name: name.to_string(),
-            path: path.to_string(),
-            sha256: None,
-            mime_type: Some("application/pdf".to_string()),
-            size: None,
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        }
-    }
-
     #[test]
     fn evaluate_rules_no_rules_is_noop() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
-        let file = make_test_file("test.pdf", "evidence/test.pdf");
-
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id: 1,
-            rel_path: "evidence/test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
-        let ctx = RuleContext {
-            project_root: dir.path(),
-            project_db: &db,
-            workspace_root: None,
-            workspace_db: None,
-        };
-        let mut fired = HashSet::new();
-        assert!(evaluate_rules(&event, &ctx, &mut fired).is_ok());
+        let (dir, db) = setup_db();
+        let file = make_test_file("test.pdf", "evidence/test.pdf", Some("application/pdf"));
+        let event = make_event(&file, 1, "evidence/test.pdf", TriggerEvent::Ingest, None);
+        let fired = run_rule_eval(&dir, &db, &event);
         assert!(fired.is_empty());
     }
 
     #[test]
     fn evaluate_rules_add_tag_action() {
-        use crate::models::ActionConfig;
+        let (dir, db, file_id) =
+            setup_file_env_with("test.pdf", b"fake pdf content", Some("application/pdf"));
 
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join(".mkrk");
-        let db = ProjectDb::create(&db_path).unwrap();
-
-        // Create a file on disk so hash_file works
-        let file_path = dir.path().join("test.pdf");
-        std::fs::write(&file_path, b"fake pdf content").unwrap();
-
-        // Insert the file into DB
-        let tracked = TrackedFile {
-            id: None,
-            name: "test.pdf".to_string(),
-            path: "test.pdf".to_string(),
-            sha256: None,
-            mime_type: Some("application/pdf".to_string()),
-            size: Some(16),
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let file_id = db.insert_file(&tracked).unwrap();
-
-        // Create an add_tag rule
-        let rule = Rule {
-            id: None,
-            name: "auto-tag".to_string(),
-            enabled: true,
-            trigger_event: TriggerEvent::Ingest,
-            trigger_filter: TriggerFilter::default(),
-            action_type: ActionType::AddTag,
-            action_config: ActionConfig {
-                tool: None,
-                tag: Some("ingested".to_string()),
-            },
-            priority: 0,
-            created_at: String::new(),
-        };
+        let rule = make_rule(
+            "auto-tag",
+            TriggerEvent::Ingest,
+            ActionType::AddTag,
+            tag_action("ingested"),
+        );
         db.insert_rule(&rule).unwrap();
 
-        // Fetch the file back so it has an id
         let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
+        let event = make_event(&file, file_id, "test.pdf", TriggerEvent::Ingest, None);
+        let fired = run_rule_eval(&dir, &db, &event);
 
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id,
-            rel_path: "test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
-        let ctx = RuleContext {
-            project_root: dir.path(),
-            project_db: &db,
-            workspace_root: None,
-            workspace_db: None,
-        };
-        let mut fired = HashSet::new();
-        evaluate_rules(&event, &ctx, &mut fired).unwrap();
-
-        // The rule should have fired and added the tag
         assert_eq!(fired.len(), 1);
         let tags = db.get_tags(file_id).unwrap();
         assert!(tags.contains(&"ingested".to_string()));
@@ -668,188 +537,78 @@ mod tests {
 
     #[test]
     fn evaluate_rules_remove_tag_action() {
-        use crate::models::ActionConfig;
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
-
-        // Create file on disk and in DB
-        let file_path = dir.path().join("test.pdf");
-        std::fs::write(&file_path, b"fake pdf").unwrap();
-
-        let tracked = TrackedFile {
-            id: None,
-            name: "test.pdf".to_string(),
-            path: "test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: Some(8),
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let file_id = db.insert_file(&tracked).unwrap();
+        let (dir, db, file_id) = setup_file_env_with("test.pdf", b"fake pdf", None);
         db.insert_tag(file_id, "needs-review", "fakehash").unwrap();
 
-        // Create remove_tag rule triggered on tag event
-        let rule = Rule {
-            id: None,
-            name: "clear-review".to_string(),
-            enabled: true,
-            trigger_event: TriggerEvent::Tag,
-            trigger_filter: TriggerFilter {
-                tag_name: Some("approved".to_string()),
-                ..Default::default()
-            },
-            action_type: ActionType::RemoveTag,
-            action_config: ActionConfig {
-                tool: None,
-                tag: Some("needs-review".to_string()),
-            },
-            priority: 0,
-            created_at: String::new(),
+        let mut rule = make_rule(
+            "clear-review",
+            TriggerEvent::Tag,
+            ActionType::RemoveTag,
+            tag_action("needs-review"),
+        );
+        rule.trigger_filter = TriggerFilter {
+            tag_name: Some("approved".to_string()),
+            ..Default::default()
         };
         db.insert_rule(&rule).unwrap();
 
         let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
-        let event = RuleEvent {
-            event: TriggerEvent::Tag,
-            file: &file,
+        let event = make_event(
+            &file,
             file_id,
-            rel_path: "test.pdf",
-            tag_name: Some("approved"),
-            target_category: None,
-        };
-        let ctx = RuleContext {
-            project_root: dir.path(),
-            project_db: &db,
-            workspace_root: None,
-            workspace_db: None,
-        };
-        let mut fired = HashSet::new();
-        evaluate_rules(&event, &ctx, &mut fired).unwrap();
+            "test.pdf",
+            TriggerEvent::Tag,
+            Some("approved"),
+        );
+        let fired = run_rule_eval(&dir, &db, &event);
 
         let tags = db.get_tags(file_id).unwrap();
         assert!(!tags.contains(&"needs-review".to_string()));
+        assert_eq!(fired.len(), 1);
     }
 
     #[test]
     fn evaluate_rules_recursion_guard() {
-        use crate::models::ActionConfig;
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
-
-        let file_path = dir.path().join("test.pdf");
-        std::fs::write(&file_path, b"content").unwrap();
-
-        let tracked = TrackedFile {
-            id: None,
-            name: "test.pdf".to_string(),
-            path: "test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: Some(7),
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let file_id = db.insert_file(&tracked).unwrap();
+        let (dir, db, file_id) = setup_file_env_with("test.pdf", b"content", None);
 
         // Rule: on tag -> add_tag (could cascade)
-        let rule = Rule {
-            id: None,
-            name: "cascade".to_string(),
-            enabled: true,
-            trigger_event: TriggerEvent::Tag,
-            trigger_filter: TriggerFilter::default(),
-            action_type: ActionType::AddTag,
-            action_config: ActionConfig {
-                tool: None,
-                tag: Some("cascaded".to_string()),
-            },
-            priority: 0,
-            created_at: String::new(),
-        };
+        let rule = make_rule(
+            "cascade",
+            TriggerEvent::Tag,
+            ActionType::AddTag,
+            tag_action("cascaded"),
+        );
         db.insert_rule(&rule).unwrap();
 
         let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
-        let event = RuleEvent {
-            event: TriggerEvent::Tag,
-            file: &file,
+        let event = make_event(
+            &file,
             file_id,
-            rel_path: "test.pdf",
-            tag_name: Some("trigger"),
-            target_category: None,
-        };
-        let ctx = RuleContext {
-            project_root: dir.path(),
-            project_db: &db,
-            workspace_root: None,
-            workspace_db: None,
-        };
-        let mut fired = HashSet::new();
+            "test.pdf",
+            TriggerEvent::Tag,
+            Some("trigger"),
+        );
         // Should not loop forever — rule fires once then is skipped on cascade
-        evaluate_rules(&event, &ctx, &mut fired).unwrap();
+        let fired = run_rule_eval(&dir, &db, &event);
         assert_eq!(fired.len(), 1);
     }
 
     #[test]
     fn evaluate_rules_disabled_rule_skipped() {
-        use crate::models::ActionConfig;
+        let (dir, db, file_id) = setup_file_env_with("test.pdf", b"content", None);
 
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
-
-        let file_path = dir.path().join("test.pdf");
-        std::fs::write(&file_path, b"content").unwrap();
-
-        let tracked = TrackedFile {
-            id: None,
-            name: "test.pdf".to_string(),
-            path: "test.pdf".to_string(),
-            sha256: None,
-            mime_type: None,
-            size: Some(7),
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let file_id = db.insert_file(&tracked).unwrap();
-
-        let rule = Rule {
-            id: None,
-            name: "disabled-rule".to_string(),
-            enabled: false,
-            trigger_event: TriggerEvent::Ingest,
-            trigger_filter: TriggerFilter::default(),
-            action_type: ActionType::AddTag,
-            action_config: ActionConfig {
-                tool: None,
-                tag: Some("should-not-appear".to_string()),
-            },
-            priority: 0,
-            created_at: String::new(),
-        };
+        let mut rule = make_rule(
+            "disabled-rule",
+            TriggerEvent::Ingest,
+            ActionType::AddTag,
+            tag_action("should-not-appear"),
+        );
+        rule.enabled = false;
         db.insert_rule(&rule).unwrap();
 
         let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id,
-            rel_path: "test.pdf",
-            tag_name: None,
-            target_category: None,
-        };
-        let ctx = RuleContext {
-            project_root: dir.path(),
-            project_db: &db,
-            workspace_root: None,
-            workspace_db: None,
-        };
-        let mut fired = HashSet::new();
-        evaluate_rules(&event, &ctx, &mut fired).unwrap();
+        let event = make_event(&file, file_id, "test.pdf", TriggerEvent::Ingest, None);
+        let fired = run_rule_eval(&dir, &db, &event);
         assert!(fired.is_empty());
         let tags = db.get_tags(file_id).unwrap();
         assert!(tags.is_empty());
@@ -857,65 +616,25 @@ mod tests {
 
     #[test]
     fn evaluate_rules_filter_rejects_mismatched_event() {
-        use crate::models::ActionConfig;
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
-
-        let file_path = dir.path().join("test.wav");
-        std::fs::write(&file_path, b"audio").unwrap();
-
-        let tracked = TrackedFile {
-            id: None,
-            name: "test.wav".to_string(),
-            path: "test.wav".to_string(),
-            sha256: None,
-            mime_type: Some("audio/wav".to_string()),
-            size: Some(5),
-            ingested_at: String::new(),
-            provenance: None,
-            immutable: false,
-        };
-        let file_id = db.insert_file(&tracked).unwrap();
+        let (dir, db, file_id) = setup_file_env_with("test.wav", b"audio", Some("audio/wav"));
 
         // Rule triggers on ingest but only for PDFs
-        let rule = Rule {
-            id: None,
-            name: "pdf-only".to_string(),
-            enabled: true,
-            trigger_event: TriggerEvent::Ingest,
-            trigger_filter: TriggerFilter {
-                file_type: Some("pdf".to_string()),
-                ..Default::default()
-            },
-            action_type: ActionType::AddTag,
-            action_config: ActionConfig {
-                tool: None,
-                tag: Some("is-pdf".to_string()),
-            },
-            priority: 0,
-            created_at: String::new(),
+        let mut rule = make_rule(
+            "pdf-only",
+            TriggerEvent::Ingest,
+            ActionType::AddTag,
+            tag_action("is-pdf"),
+        );
+        rule.trigger_filter = TriggerFilter {
+            file_type: Some("pdf".to_string()),
+            ..Default::default()
         };
         db.insert_rule(&rule).unwrap();
 
         let file = db.get_file_by_path("test.wav").unwrap().unwrap();
-        let event = RuleEvent {
-            event: TriggerEvent::Ingest,
-            file: &file,
-            file_id,
-            rel_path: "test.wav",
-            tag_name: None,
-            target_category: None,
-        };
-        let ctx = RuleContext {
-            project_root: dir.path(),
-            project_db: &db,
-            workspace_root: None,
-            workspace_db: None,
-        };
-        let mut fired = HashSet::new();
-        evaluate_rules(&event, &ctx, &mut fired).unwrap();
+        let event = make_event(&file, file_id, "test.wav", TriggerEvent::Ingest, None);
         // Rule matched event type but filter rejected it
+        let fired = run_rule_eval(&dir, &db, &event);
         assert!(fired.is_empty());
         let tags = db.get_tags(file_id).unwrap();
         assert!(tags.is_empty());

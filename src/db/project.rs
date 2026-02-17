@@ -28,7 +28,7 @@ impl ProjectDb {
     pub fn create(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to create project db at {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        super::configure_conn(&conn)
             .with_context(|| format!("failed to configure project db at {}", path.display()))?;
         conn.execute_batch(&PROJECT_SCHEMA)?;
         migrate(&conn)?;
@@ -41,7 +41,7 @@ impl ProjectDb {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open project db at {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        super::configure_conn(&conn)
             .with_context(|| format!("failed to configure project db at {}", path.display()))?;
         migrate(&conn)?;
         Ok(Self { conn })

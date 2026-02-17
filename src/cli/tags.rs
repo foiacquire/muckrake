@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -8,7 +8,25 @@ use crate::context::{discover, Context};
 use crate::integrity;
 use crate::models::{TrackedFile, TriggerEvent};
 use crate::reference::{parse_reference, resolve_references};
-use crate::rules::{evaluate_rules, RuleContext, RuleEvent};
+use crate::rules::RuleEvent;
+
+fn fire_tag_event(
+    ctx: &Context,
+    file: &TrackedFile,
+    file_id: i64,
+    tag: &str,
+    trigger: TriggerEvent,
+) {
+    let event = RuleEvent {
+        event: trigger,
+        file,
+        file_id,
+        rel_path: &file.path,
+        tag_name: Some(tag),
+        target_category: None,
+    };
+    crate::rules::fire_rules(ctx, &event);
+}
 
 fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(TrackedFile, i64)> {
     let parsed = parse_reference(reference)?;
@@ -35,30 +53,14 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
         file.name
     );
 
-    let (workspace_root, workspace_db) = crate::cli::ingest::workspace_from_ctx(&ctx);
-    let rule_ctx = RuleContext {
-        project_root,
-        project_db,
-        workspace_root,
-        workspace_db,
-    };
-    let event = RuleEvent {
-        event: TriggerEvent::Tag,
-        file: &file,
-        file_id,
-        rel_path: &file.path,
-        tag_name: Some(tag),
-        target_category: None,
-    };
-    let mut fired = HashSet::new();
-    let _ = evaluate_rules(&event, &rule_ctx, &mut fired);
+    fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Tag);
 
     Ok(())
 }
 
 pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (project_root, project_db) = ctx.require_project()?;
+    let (_project_root, project_db) = ctx.require_project()?;
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let removed = project_db.remove_tag(file_id, tag)?;
@@ -67,23 +69,7 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     }
     eprintln!("Removed tag '{tag}' from '{}'", file.name);
 
-    let (workspace_root, workspace_db) = crate::cli::ingest::workspace_from_ctx(&ctx);
-    let rule_ctx = RuleContext {
-        project_root,
-        project_db,
-        workspace_root,
-        workspace_db,
-    };
-    let event = RuleEvent {
-        event: TriggerEvent::Untag,
-        file: &file,
-        file_id,
-        rel_path: &file.path,
-        tag_name: Some(tag),
-        target_category: None,
-    };
-    let mut fired = HashSet::new();
-    let _ = evaluate_rules(&event, &rule_ctx, &mut fired);
+    fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Untag);
 
     Ok(())
 }

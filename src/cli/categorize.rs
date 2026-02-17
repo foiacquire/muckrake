@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -10,9 +9,9 @@ const CROSS_DEVICE_ERROR: i32 = 17; // ERROR_NOT_SAME_DEVICE
 
 use crate::context::discover;
 use crate::integrity;
-use crate::models::{ProtectionLevel, TrackedFile, TriggerEvent};
+use crate::models::{ProtectionLevel, TriggerEvent};
 use crate::reference::{parse_reference, resolve_references};
-use crate::rules::{evaluate_rules, RuleContext, RuleEvent};
+use crate::rules::RuleEvent;
 use crate::util::whoami;
 
 pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
@@ -61,38 +60,17 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
     eprintln!("Moved: {} -> {}", file.path, new_rel_path);
     eprintln!("  Protection: {new_protection}");
 
-    fire_categorize_rules(&ctx, &file, file_id, &new_rel_path, category);
-
-    Ok(())
-}
-
-fn fire_categorize_rules(
-    ctx: &crate::context::Context,
-    file: &TrackedFile,
-    file_id: i64,
-    rel_path: &str,
-    category: &str,
-) {
-    let Ok((project_root, project_db)) = ctx.require_project() else {
-        return;
-    };
-    let (workspace_root, workspace_db) = crate::cli::ingest::workspace_from_ctx(ctx);
-    let rule_ctx = RuleContext {
-        project_root,
-        project_db,
-        workspace_root,
-        workspace_db,
-    };
     let event = RuleEvent {
         event: TriggerEvent::Categorize,
-        file,
+        file: &file,
         file_id,
-        rel_path,
+        rel_path: &new_rel_path,
         tag_name: None,
         target_category: Some(category),
     };
-    let mut fired = HashSet::new();
-    let _ = evaluate_rules(&event, &rule_ctx, &mut fired);
+    crate::rules::fire_rules(&ctx, &event);
+
+    Ok(())
 }
 
 fn apply_protection(

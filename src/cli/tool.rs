@@ -437,26 +437,31 @@ fn tool_patterns(project_root: &Path, project_db: &ProjectDb) -> Vec<String> {
     patterns
 }
 
-fn discover_all_tools(project_root: &Path, project_db: &ProjectDb) -> Vec<(String, PathBuf)> {
-    let mut tools: Vec<(String, PathBuf)> = Vec::new();
-
+fn iter_tool_files(project_root: &Path, project_db: &ProjectDb) -> Vec<PathBuf> {
+    let mut files = Vec::new();
     for pattern in tool_patterns(project_root, project_db) {
         let Ok(entries) = glob::glob(&pattern) else {
             continue;
         };
         for entry in entries.flatten() {
-            if !entry.is_file() {
-                continue;
-            }
-            if let Some(name) = entry.file_stem() {
-                let name = name.to_string_lossy().to_string();
-                if !tools.iter().any(|(n, _)| n == &name) {
-                    tools.push((name, entry));
-                }
+            if entry.is_file() {
+                files.push(entry);
             }
         }
     }
+    files
+}
 
+fn discover_all_tools(project_root: &Path, project_db: &ProjectDb) -> Vec<(String, PathBuf)> {
+    let mut tools: Vec<(String, PathBuf)> = Vec::new();
+    for entry in iter_tool_files(project_root, project_db) {
+        if let Some(name) = entry.file_stem() {
+            let name = name.to_string_lossy().to_string();
+            if !tools.iter().any(|(n, _)| n == &name) {
+                tools.push((name, entry));
+            }
+        }
+    }
     tools.sort_by(|a, b| a.0.cmp(&b.0));
     tools
 }
@@ -465,22 +470,10 @@ fn discover_tool(project_root: &Path, project_db: &ProjectDb, name: &str) -> Res
     if name.contains('/') || name.contains("..") {
         bail!("tool name '{name}' contains invalid path characters");
     }
-
-    for pattern in tool_patterns(project_root, project_db) {
-        let Ok(entries) = glob::glob(&pattern) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if !entry.is_file() {
-                continue;
-            }
-            if entry.file_stem().map(|s| s.to_string_lossy()).as_deref() == Some(name) {
-                return Ok(entry);
-            }
-        }
-    }
-
-    bail!("tool '{name}' not found")
+    iter_tool_files(project_root, project_db)
+        .into_iter()
+        .find(|entry| entry.file_stem().map(|s| s.to_string_lossy()).as_deref() == Some(name))
+        .ok_or_else(|| anyhow::anyhow!("tool '{name}' not found"))
 }
 
 #[cfg(test)]
