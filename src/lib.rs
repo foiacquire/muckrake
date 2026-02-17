@@ -11,6 +11,7 @@ pub mod context;
 pub mod db;
 pub mod integrity;
 pub mod models;
+pub mod pipeline;
 pub mod reference;
 pub mod rules;
 pub mod tools;

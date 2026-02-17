@@ -11,8 +11,8 @@ use sea_query_rusqlite::RusqliteBinder;
 
 use crate::models::policy::strictest;
 use crate::models::{
-    ActionConfig, ActionType, Category, FileTag, ProtectionLevel, Rule, TrackedFile, TriggerEvent,
-    TriggerFilter,
+    ActionConfig, ActionType, AttachmentScope, Category, FileTag, Pipeline, PipelineAttachment,
+    ProtectionLevel, Rule, Sign, TrackedFile, TriggerEvent, TriggerFilter,
 };
 
 use super::iden::{
@@ -775,6 +775,102 @@ impl ProjectDb {
         let rows = stmt.query_map(&*values.as_params(), row_to_rule)?;
         rows.map(|r| Ok(r?)).collect()
     }
+
+    // ── Pipelines ─────────────────────────────────────────────────────
+
+    pub fn insert_pipeline(&self, pipeline: &Pipeline) -> Result<i64> {
+        super::pipeline::insert_pipeline(&self.conn, pipeline)
+    }
+
+    pub fn get_pipeline_by_name(&self, name: &str) -> Result<Option<Pipeline>> {
+        super::pipeline::get_pipeline_by_name(&self.conn, name)
+    }
+
+    pub fn list_pipelines(&self) -> Result<Vec<Pipeline>> {
+        super::pipeline::list_pipelines(&self.conn)
+    }
+
+    pub fn remove_pipeline(&self, name: &str) -> Result<u64> {
+        super::pipeline::remove_pipeline(&self.conn, name)
+    }
+
+    pub fn pipeline_count(&self) -> Result<i64> {
+        super::pipeline::pipeline_count(&self.conn)
+    }
+
+    pub fn attach_pipeline(
+        &self,
+        pipeline_id: i64,
+        scope_type: AttachmentScope,
+        scope_value: &str,
+    ) -> Result<i64> {
+        super::pipeline::attach_pipeline(&self.conn, pipeline_id, scope_type, scope_value)
+    }
+
+    pub fn detach_pipeline(
+        &self,
+        pipeline_id: i64,
+        scope_type: AttachmentScope,
+        scope_value: &str,
+    ) -> Result<u64> {
+        super::pipeline::detach_pipeline(&self.conn, pipeline_id, scope_type, scope_value)
+    }
+
+    pub fn list_attachments_for_pipeline(
+        &self,
+        pipeline_id: i64,
+    ) -> Result<Vec<PipelineAttachment>> {
+        super::pipeline::list_attachments_for_pipeline(&self.conn, pipeline_id)
+    }
+
+    pub fn get_pipelines_for_file(
+        &self,
+        file_id: i64,
+        rel_path: &str,
+        categories: &[Category],
+        tags: &[String],
+    ) -> Result<Vec<Pipeline>> {
+        super::pipeline::get_pipelines_for_file(&self.conn, file_id, rel_path, categories, tags)
+    }
+
+    pub fn insert_sign(&self, sign: &Sign) -> Result<i64> {
+        super::pipeline::insert_sign(&self.conn, sign)
+    }
+
+    pub fn revoke_sign(&self, sign_id: i64, revoked_at: &str) -> Result<u64> {
+        super::pipeline::revoke_sign(&self.conn, sign_id, revoked_at)
+    }
+
+    pub fn get_valid_signs_for_file_pipeline(
+        &self,
+        file_id: i64,
+        pipeline_id: i64,
+        current_hash: &str,
+    ) -> Result<Vec<Sign>> {
+        super::pipeline::get_valid_signs_for_file_pipeline(
+            &self.conn,
+            file_id,
+            pipeline_id,
+            current_hash,
+        )
+    }
+
+    pub fn get_signs_for_file(&self, file_id: i64) -> Result<Vec<Sign>> {
+        super::pipeline::get_signs_for_file(&self.conn, file_id)
+    }
+
+    pub fn find_sign(
+        &self,
+        file_id: i64,
+        pipeline_id: i64,
+        sign_name: &str,
+    ) -> Result<Option<Sign>> {
+        super::pipeline::find_sign(&self.conn, file_id, pipeline_id, sign_name)
+    }
+
+    pub fn sign_count(&self) -> Result<i64> {
+        super::pipeline::sign_count(&self.conn)
+    }
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -784,7 +880,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_category_policy_table(conn)?;
     migrate_file_tags_hash(conn)?;
     migrate_category_name(conn)?;
-    migrate_rules_table(conn)
+    migrate_rules_table(conn)?;
+    super::pipeline::migrate_pipeline_tables(conn)
 }
 
 fn migrate_category_type(conn: &Connection) -> Result<()> {

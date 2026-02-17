@@ -62,10 +62,17 @@ fn print_project_stats(db: &ProjectDb) -> Result<()> {
     let files = db.file_count()?;
     let categories = db.category_count()?;
     let tags = db.tag_count()?;
+    let pipelines = db.pipeline_count()?;
+    let signs = db.sign_count()?;
 
     eprintln!("  Files: {files}");
     eprintln!("  Categories: {categories}");
     eprintln!("  Tags: {tags}");
+
+    if pipelines > 0 {
+        eprintln!("  Pipelines: {pipelines}");
+        eprintln!("  Active signs: {signs}");
+    }
 
     if let Some(last_verify) = db.last_verify_time()? {
         eprintln!("  Last verified: {last_verify}");

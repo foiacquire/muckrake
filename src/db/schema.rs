@@ -102,6 +102,35 @@ CREATE TABLE IF NOT EXISTS rules (
 );
 ";
 
+const PIPELINE_TABLES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS pipelines (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    states TEXT NOT NULL,
+    transitions TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_attachments (
+    id INTEGER PRIMARY KEY,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
+    scope_type TEXT NOT NULL,
+    scope_value TEXT NOT NULL,
+    UNIQUE(pipeline_id, scope_type, scope_value)
+);
+
+CREATE TABLE IF NOT EXISTS signs (
+    id INTEGER PRIMARY KEY,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    file_hash TEXT NOT NULL,
+    sign_name TEXT NOT NULL,
+    signer TEXT NOT NULL,
+    signed_at TEXT NOT NULL,
+    signature TEXT,
+    revoked_at TEXT
+);
+";
+
 const PROJECT_SCHEMA_SUFFIX: &str = "
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY,
@@ -143,6 +172,15 @@ CREATE TABLE IF NOT EXISTS default_category_policy (
 );
 ";
 
+const DEFAULT_PIPELINES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS default_pipelines (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    states TEXT NOT NULL,
+    transitions TEXT NOT NULL
+);
+";
+
 const WORKSPACE_SCHEMA_SUFFIX: &str = "
 CREATE TABLE IF NOT EXISTS entity_links (
     id INTEGER PRIMARY KEY,
@@ -156,9 +194,10 @@ CREATE TABLE IF NOT EXISTS entity_links (
 
 use std::sync::LazyLock;
 
-pub static PROJECT_SCHEMA: LazyLock<String> =
-    LazyLock::new(|| format!("{PROJECT_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}"));
+pub static PROJECT_SCHEMA: LazyLock<String> = LazyLock::new(|| {
+    format!("{PROJECT_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{PIPELINE_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}")
+});
 
 pub static WORKSPACE_SCHEMA: LazyLock<String> = LazyLock::new(|| {
-    format!("{WORKSPACE_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
+    format!("{WORKSPACE_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{DEFAULT_PIPELINES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
 });

@@ -9,7 +9,7 @@ use sea_query::{
 };
 use sea_query_rusqlite::RusqliteBinder;
 
-use crate::models::{Category, ProtectionLevel};
+use crate::models::{Category, Pipeline, ProtectionLevel};
 use crate::reference::validate_name;
 
 use super::iden::{
@@ -443,6 +443,20 @@ impl WorkspaceDb {
         let count = self.conn.execute(&sql, &*values.as_params())?;
         Ok(count as u64)
     }
+
+    // ── Default Pipelines ─────────────────────────────────────────────
+
+    pub fn insert_default_pipeline(&self, pipeline: &Pipeline) -> Result<i64> {
+        super::pipeline::insert_default_pipeline(&self.conn, pipeline)
+    }
+
+    pub fn list_default_pipelines(&self) -> Result<Vec<Pipeline>> {
+        super::pipeline::list_default_pipelines(&self.conn)
+    }
+
+    pub fn remove_default_pipeline(&self, name: &str) -> Result<u64> {
+        super::pipeline::remove_default_pipeline(&self.conn, name)
+    }
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -450,7 +464,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_tag_tool_config_quiet(conn)?;
     migrate_default_category_type(conn)?;
     migrate_default_category_policy_table(conn)?;
-    migrate_default_category_name(conn)
+    migrate_default_category_name(conn)?;
+    super::pipeline::migrate_default_pipelines_table(conn)
 }
 
 fn migrate_add_column(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<()> {

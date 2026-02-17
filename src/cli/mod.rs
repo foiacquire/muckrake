@@ -4,9 +4,11 @@ pub mod inbox;
 pub mod ingest;
 pub mod init;
 pub mod list;
+pub mod pipeline;
 pub mod projects;
 pub mod rule;
 pub mod scope;
+pub mod sign;
 pub mod status;
 pub mod tags;
 pub mod tool;
@@ -168,6 +170,47 @@ pub enum Commands {
         #[command(subcommand)]
         command: RuleCommands,
     },
+    /// Manage pipelines (state machines for file workflows)
+    Pipeline {
+        #[command(subcommand)]
+        command: PipelineCommands,
+    },
+    /// Attest a file has reached a pipeline stage
+    Sign {
+        /// File reference
+        reference: String,
+        /// Sign name (must match a pipeline transition requirement)
+        sign_name: String,
+        /// Pipeline name (required if file is in multiple pipelines)
+        #[arg(long)]
+        pipeline: Option<String>,
+        /// Create a detached GPG signature
+        #[arg(long)]
+        gpg: bool,
+    },
+    /// Revoke a sign (attestation) on a file
+    Unsign {
+        /// File reference
+        reference: String,
+        /// Sign name to revoke
+        sign_name: String,
+        /// Pipeline name (required if file is in multiple pipelines)
+        #[arg(long)]
+        pipeline: Option<String>,
+    },
+    /// List signs (attestations) for files
+    Signs {
+        /// File reference (all files if omitted)
+        reference: Option<String>,
+    },
+    /// Show pipeline state for files
+    State {
+        /// File reference (all files if omitted)
+        reference: Option<String>,
+        /// Filter to a specific pipeline
+        #[arg(long)]
+        pipeline: Option<String>,
+    },
 }
 
 #[derive(Clone, Subcommand)]
@@ -263,6 +306,50 @@ pub enum InboxCommands {
         /// Target category path
         #[arg(long = "as")]
         category: Option<String>,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+pub enum PipelineCommands {
+    /// Add a new pipeline
+    Add {
+        /// Pipeline name
+        name: String,
+        /// Comma-separated states (e.g., draft,review,published)
+        #[arg(long)]
+        states: String,
+        /// Custom transitions as JSON (auto-generated if omitted)
+        #[arg(long)]
+        transitions: Option<String>,
+    },
+    /// List all pipelines
+    List,
+    /// Remove a pipeline (also removes its signs and attachments)
+    Remove {
+        /// Pipeline name
+        name: String,
+    },
+    /// Attach a pipeline to a category or tag
+    Attach {
+        /// Pipeline name
+        pipeline: String,
+        /// Category to attach to
+        #[arg(long)]
+        category: Option<String>,
+        /// Tag to attach to
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Detach a pipeline from a category or tag
+    Detach {
+        /// Pipeline name
+        pipeline: String,
+        /// Category to detach from
+        #[arg(long)]
+        category: Option<String>,
+        /// Tag to detach from
+        #[arg(long)]
+        tag: Option<String>,
     },
 }
 

@@ -5,7 +5,9 @@ use anyhow::{bail, Result};
 use clap::Parser;
 
 use muckrake::cli::scope::extract_scope;
-use muckrake::cli::{CategoryCommands, Cli, Commands, InboxCommands, RuleCommands, ToolCommands};
+use muckrake::cli::{
+    CategoryCommands, Cli, Commands, InboxCommands, PipelineCommands, RuleCommands, ToolCommands,
+};
 use muckrake::context::{discover, resolve_scope, Context};
 
 fn main() -> Result<()> {
@@ -101,6 +103,10 @@ const fn should_iterate_projects(command: &Commands) -> bool {
             ToolCommands::Add { .. } | ToolCommands::Remove { .. }
         ),
         Commands::Rule { command } => matches!(command, RuleCommands::List),
+        Commands::Pipeline { command } => matches!(
+            command,
+            PipelineCommands::List | PipelineCommands::Add { .. } | PipelineCommands::Remove { .. }
+        ),
         _ => false,
     }
 }
@@ -125,6 +131,7 @@ fn rewrite_category_shorthand(args: &mut Vec<String>) {
     args.insert(next_pos, "update".to_string());
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
     match command {
         Commands::Init {
@@ -169,6 +176,23 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
         Commands::Tool { command } => dispatch_tool(cwd, command),
         Commands::Category { command } => dispatch_category(cwd, command),
         Commands::Rule { command } => dispatch_rule(cwd, command),
+        Commands::Pipeline { command } => dispatch_pipeline(cwd, command),
+        Commands::Sign {
+            reference,
+            sign_name,
+            pipeline,
+            gpg,
+        } => muckrake::cli::sign::run_sign(cwd, &reference, &sign_name, pipeline.as_deref(), gpg),
+        Commands::Unsign {
+            reference,
+            sign_name,
+            pipeline,
+        } => muckrake::cli::sign::run_unsign(cwd, &reference, &sign_name, pipeline.as_deref()),
+        Commands::Signs { reference } => muckrake::cli::sign::run_signs(cwd, reference.as_deref()),
+        Commands::State {
+            reference,
+            pipeline,
+        } => muckrake::cli::sign::run_state(cwd, reference.as_deref(), pipeline.as_deref()),
     }
 }
 
@@ -271,6 +295,32 @@ fn dispatch_category(cwd: &Path, command: Option<CategoryCommands>) -> Result<()
             protection.as_deref(),
         ),
         Some(CategoryCommands::Remove { name }) => muckrake::cli::category::run_remove(cwd, &name),
+    }
+}
+
+fn dispatch_pipeline(cwd: &Path, command: PipelineCommands) -> Result<()> {
+    match command {
+        PipelineCommands::Add {
+            name,
+            states,
+            transitions,
+        } => muckrake::cli::pipeline::run_add(cwd, &name, &states, transitions.as_deref()),
+        PipelineCommands::List => muckrake::cli::pipeline::run_list(cwd),
+        PipelineCommands::Remove { name } => muckrake::cli::pipeline::run_remove(cwd, &name),
+        PipelineCommands::Attach {
+            pipeline,
+            category,
+            tag,
+        } => {
+            muckrake::cli::pipeline::run_attach(cwd, &pipeline, category.as_deref(), tag.as_deref())
+        }
+        PipelineCommands::Detach {
+            pipeline,
+            category,
+            tag,
+        } => {
+            muckrake::cli::pipeline::run_detach(cwd, &pipeline, category.as_deref(), tag.as_deref())
+        }
     }
 }
 

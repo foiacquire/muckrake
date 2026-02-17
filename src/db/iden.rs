@@ -125,6 +125,47 @@ pub enum Rules {
 }
 
 #[derive(Iden)]
+pub enum Pipelines {
+    Table,
+    Id,
+    Name,
+    States,
+    Transitions,
+}
+
+#[derive(Iden)]
+pub enum PipelineAttachments {
+    Table,
+    Id,
+    PipelineId,
+    ScopeType,
+    ScopeValue,
+}
+
+#[derive(Iden)]
+pub enum Signs {
+    Table,
+    Id,
+    PipelineId,
+    FileId,
+    FileHash,
+    SignName,
+    Signer,
+    SignedAt,
+    Signature,
+    RevokedAt,
+}
+
+#[derive(Iden)]
+pub enum DefaultPipelines {
+    Table,
+    Id,
+    Name,
+    States,
+    Transitions,
+}
+
+#[derive(Iden)]
 pub enum EntityLinks {
     Table,
     Id,
