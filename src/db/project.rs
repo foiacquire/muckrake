@@ -205,6 +205,7 @@ impl ProjectDb {
                 Files::Name,
                 Files::Path,
                 Files::Sha256,
+                Files::Fingerprint,
                 Files::MimeType,
                 Files::Size,
                 Files::IngestedAt,
@@ -215,6 +216,7 @@ impl ProjectDb {
                 file.name.as_str().into(),
                 file.path.as_str().into(),
                 file.sha256.clone().into(),
+                file.fingerprint.clone().into(),
                 file.mime_type.clone().into(),
                 file.size.into(),
                 file.ingested_at.as_str().into(),
@@ -275,6 +277,7 @@ impl ProjectDb {
                 (Files::Table, Files::Name),
                 (Files::Table, Files::Path),
                 (Files::Table, Files::Sha256),
+                (Files::Table, Files::Fingerprint),
                 (Files::Table, Files::MimeType),
                 (Files::Table, Files::Size),
                 (Files::Table, Files::IngestedAt),
@@ -355,14 +358,40 @@ impl ProjectDb {
         Ok(())
     }
 
-    pub fn insert_tag(&self, file_id: i64, tag: &str, file_hash: &str) -> Result<()> {
+    pub fn update_file_fingerprint(&self, file_id: i64, fingerprint: &str) -> Result<()> {
+        let (sql, values) = Query::update()
+            .table(Files::Table)
+            .value(Files::Fingerprint, fingerprint)
+            .and_where(Expr::col(Files::Id).eq(file_id))
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(())
+    }
+
+    pub fn insert_tag(
+        &self,
+        file_id: i64,
+        tag: &str,
+        file_hash: &str,
+        fingerprint: &str,
+    ) -> Result<()> {
         let (sql, values) = Query::insert()
             .into_table(FileTags::Table)
-            .columns([FileTags::FileId, FileTags::Tag, FileTags::FileHash])
-            .values_panic([file_id.into(), tag.into(), file_hash.into()])
+            .columns([
+                FileTags::FileId,
+                FileTags::Tag,
+                FileTags::FileHash,
+                FileTags::Fingerprint,
+            ])
+            .values_panic([
+                file_id.into(),
+                tag.into(),
+                file_hash.into(),
+                fingerprint.into(),
+            ])
             .on_conflict(
                 OnConflict::columns([FileTags::FileId, FileTags::Tag])
-                    .update_column(FileTags::FileHash)
+                    .update_columns([FileTags::FileHash, FileTags::Fingerprint])
                     .to_owned(),
             )
             .build_rusqlite(SqliteQueryBuilder);
@@ -394,7 +423,12 @@ impl ProjectDb {
 
     pub fn list_all_tags(&self) -> Result<Vec<FileTag>> {
         let (sql, values) = Query::select()
-            .columns([FileTags::FileId, FileTags::Tag, FileTags::FileHash])
+            .columns([
+                FileTags::FileId,
+                FileTags::Tag,
+                FileTags::FileHash,
+                FileTags::Fingerprint,
+            ])
             .from(FileTags::Table)
             .order_by(FileTags::Tag, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
@@ -404,6 +438,7 @@ impl ProjectDb {
                 file_id: row.get(0)?,
                 tag: row.get(1)?,
                 file_hash: row.get(2)?,
+                fingerprint: row.get(3)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -412,6 +447,26 @@ impl ProjectDb {
     pub fn get_file_tag_hash(&self, file_id: i64, tag: &str) -> Result<Option<String>> {
         let (sql, values) = Query::select()
             .column(FileTags::FileHash)
+            .from(FileTags::Table)
+            .and_where(Expr::col(FileTags::FileId).eq(file_id))
+            .and_where(Expr::col(FileTags::Tag).eq(tag))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows =
+            stmt.query_map(&*values.as_params(), |row| row.get::<_, Option<String>>(0))?;
+        match rows.next() {
+            Some(row) => Ok(row?),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_file_tag_fingerprint(
+        &self,
+        file_id: i64,
+        tag: &str,
+    ) -> Result<Option<String>> {
+        let (sql, values) = Query::select()
+            .column(FileTags::Fingerprint)
             .from(FileTags::Table)
             .and_where(Expr::col(FileTags::FileId).eq(file_id))
             .and_where(Expr::col(FileTags::Tag).eq(tag))
@@ -885,6 +940,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_file_tags_hash(conn)?;
     migrate_category_name(conn)?;
     migrate_rules_table(conn)?;
+    migrate_files_fingerprint(conn)?;
+    migrate_file_tags_fingerprint(conn)?;
     super::pipeline::migrate_pipeline_tables(conn)
 }
 
@@ -1019,11 +1076,12 @@ fn row_to_category(row: &rusqlite::Row) -> rusqlite::Result<Category> {
     })
 }
 
-const FILE_COLUMNS: [Files; 9] = [
+const FILE_COLUMNS: [Files; 10] = [
     Files::Id,
     Files::Name,
     Files::Path,
     Files::Sha256,
+    Files::Fingerprint,
     Files::MimeType,
     Files::Size,
     Files::IngestedAt,
@@ -1037,11 +1095,12 @@ fn row_to_file(row: &rusqlite::Row) -> rusqlite::Result<TrackedFile> {
         name: row.get(1)?,
         path: row.get(2)?,
         sha256: row.get(3)?,
-        mime_type: row.get(4)?,
-        size: row.get(5)?,
-        ingested_at: row.get(6)?,
-        provenance: row.get(7)?,
-        immutable: row.get::<_, i32>(8)? != 0,
+        fingerprint: row.get(4)?,
+        mime_type: row.get(5)?,
+        size: row.get(6)?,
+        ingested_at: row.get(7)?,
+        provenance: row.get(8)?,
+        immutable: row.get::<_, i32>(9)? != 0,
     })
 }
 
@@ -1221,6 +1280,38 @@ fn migrate_rules_table(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_files_fingerprint(conn: &Connection) -> Result<()> {
+    let table_exists = conn.prepare("SELECT id FROM files LIMIT 0").is_ok();
+    if !table_exists {
+        return Ok(());
+    }
+    let has_column = conn
+        .prepare("SELECT fingerprint FROM files LIMIT 0")
+        .is_ok();
+    if has_column {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE files ADD COLUMN fingerprint TEXT;")?;
+    Ok(())
+}
+
+fn migrate_file_tags_fingerprint(conn: &Connection) -> Result<()> {
+    let table_exists = conn
+        .prepare("SELECT file_id FROM file_tags LIMIT 0")
+        .is_ok();
+    if !table_exists {
+        return Ok(());
+    }
+    let has_column = conn
+        .prepare("SELECT fingerprint FROM file_tags LIMIT 0")
+        .is_ok();
+    if has_column {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE file_tags ADD COLUMN fingerprint TEXT;")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1296,6 +1387,7 @@ mod tests {
             name: "test.pdf".to_string(),
             path: "evidence/test.pdf".to_string(),
             sha256: Some("abc123".to_string()),
+            fingerprint: None,
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1330,6 +1422,7 @@ mod tests {
             name: "recording.wav".to_string(),
             path: "evidence/recording.wav".to_string(),
             sha256: Some("def456".to_string()),
+            fingerprint: None,
             mime_type: Some("audio/wav".to_string()),
             size: Some(2048),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1338,8 +1431,8 @@ mod tests {
         };
         let file_id = db.insert_file(&file).unwrap();
 
-        db.insert_tag(file_id, "speech", "def456").unwrap();
-        db.insert_tag(file_id, "rf", "def456").unwrap();
+        db.insert_tag(file_id, "speech", "def456", "[]").unwrap();
+        db.insert_tag(file_id, "rf", "def456", "[]").unwrap();
 
         let tags = db.get_tags(file_id).unwrap();
         assert_eq!(tags, vec!["rf", "speech"]);
@@ -1361,6 +1454,7 @@ mod tests {
             name: "doc.pdf".to_string(),
             path: "evidence/doc.pdf".to_string(),
             sha256: Some("abc123".to_string()),
+            fingerprint: None,
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1369,7 +1463,7 @@ mod tests {
         };
         let file_id = db.insert_file(&file).unwrap();
 
-        db.insert_tag(file_id, "classified", "sha256_hash_value")
+        db.insert_tag(file_id, "classified", "sha256_hash_value", "[]")
             .unwrap();
 
         let hash = db.get_file_tag_hash(file_id, "classified").unwrap();
@@ -1388,6 +1482,7 @@ mod tests {
             name: "doc.pdf".to_string(),
             path: "evidence/doc.pdf".to_string(),
             sha256: Some("abc123".to_string()),
+            fingerprint: None,
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1396,13 +1491,15 @@ mod tests {
         };
         let file_id = db.insert_file(&file).unwrap();
 
-        db.insert_tag(file_id, "classified", "old_hash").unwrap();
+        db.insert_tag(file_id, "classified", "old_hash", "[]")
+            .unwrap();
         assert_eq!(
             db.get_file_tag_hash(file_id, "classified").unwrap(),
             Some("old_hash".to_string())
         );
 
-        db.insert_tag(file_id, "classified", "new_hash").unwrap();
+        db.insert_tag(file_id, "classified", "new_hash", "[\"abc\"]")
+            .unwrap();
         assert_eq!(
             db.get_file_tag_hash(file_id, "classified").unwrap(),
             Some("new_hash".to_string())
@@ -1504,7 +1601,7 @@ mod tests {
         assert_eq!(tags[0].tag, "old-tag");
         assert_eq!(tags[0].file_hash, None);
 
-        db.insert_tag(1, "new-tag", "somehash").unwrap();
+        db.insert_tag(1, "new-tag", "somehash", "[]").unwrap();
         let hash = db.get_file_tag_hash(1, "new-tag").unwrap();
         assert_eq!(hash, Some("somehash".to_string()));
     }
@@ -1642,6 +1739,7 @@ mod tests {
             name: "test.pdf".to_string(),
             path: "test.pdf".to_string(),
             sha256: None,
+            fingerprint: None,
             mime_type: None,
             size: None,
             ingested_at: "2025-01-01T00:00:00Z".to_string(),

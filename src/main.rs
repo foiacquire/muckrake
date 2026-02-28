@@ -6,7 +6,7 @@ use clap::Parser;
 
 use muckrake::cli::scope::extract_scope;
 use muckrake::cli::{
-    CategoryCommands, Cli, Commands, InboxCommands, PipelineCommands, RuleCommands, ToolCommands,
+    CategoryCommands, Cli, Commands, InboxCommands, PipelineCommands, RuleCommands,
 };
 use muckrake::context::{discover, resolve_scope, Context};
 use muckrake::models::TriggerEvent;
@@ -98,11 +98,7 @@ const fn should_iterate_projects(command: &Commands) -> bool {
         | Commands::Tags {
             reference: None, ..
         } => true,
-        Commands::List { references } => references.is_empty(),
-        Commands::Tool { command } => matches!(
-            command,
-            ToolCommands::Add { .. } | ToolCommands::Remove { .. }
-        ),
+        Commands::List { references, .. } => references.is_empty(),
         Commands::Rule { command } => matches!(command, RuleCommands::List),
         Commands::Pipeline { command } => matches!(
             command,
@@ -155,7 +151,16 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
         ),
         Commands::Status => muckrake::cli::status::run(cwd),
         Commands::Ingest { scope } => muckrake::cli::ingest::run(cwd, scope.as_deref()),
-        Commands::List { references } => muckrake::cli::list::run(cwd, &references),
+        Commands::List {
+            references,
+            no_hash_check,
+        } => muckrake::cli::list::run(cwd, &references, no_hash_check),
+        Commands::Read {
+            references,
+            path,
+            query,
+            raw,
+        } => muckrake::cli::read::run(cwd, &references, path, query, raw),
         Commands::View { reference } => muckrake::cli::view::run_view(cwd, &reference),
         Commands::Edit { reference } => muckrake::cli::view::run_edit(cwd, &reference),
         Commands::Verify { reference } => muckrake::cli::verify::run(cwd, reference.as_deref()),
@@ -178,7 +183,7 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
             None => muckrake::cli::inbox::run_list(cwd),
         },
         Commands::Projects => muckrake::cli::projects::run(cwd),
-        Commands::Tool { command } => dispatch_tool(cwd, command),
+        Commands::Tool { name, args } => muckrake::cli::tool::run(cwd, &name, &args),
         Commands::Category { command } => dispatch_category(cwd, command),
         Commands::Rule { command } => dispatch_rule(cwd, command),
         Commands::Pipeline { command } => dispatch_pipeline(cwd, command),
@@ -229,45 +234,6 @@ fn dispatch_init(
             muckrake::cli::init::run_init_workspace(cwd, &projects_dir, inbox, no_categories)
         },
     )
-}
-
-fn dispatch_tool(cwd: &Path, command: ToolCommands) -> Result<()> {
-    match command {
-        ToolCommands::Add {
-            name,
-            command,
-            scope,
-            file_type,
-            tag,
-            env,
-            verbose,
-        } => {
-            let params = muckrake::cli::tool::AddToolParams {
-                name: &name,
-                command: &command,
-                scope: scope.as_deref(),
-                file_type: &file_type,
-                tag: tag.as_deref(),
-                env: env.as_deref(),
-                verbose,
-            };
-            muckrake::cli::tool::run_add(cwd, &params)
-        }
-        ToolCommands::List => muckrake::cli::tool::run_list(cwd),
-        ToolCommands::Remove {
-            name,
-            scope,
-            file_type,
-            tag,
-        } => muckrake::cli::tool::run_remove(
-            cwd,
-            &name,
-            scope.as_deref(),
-            file_type.as_deref(),
-            tag.as_deref(),
-        ),
-        ToolCommands::Run(args) => muckrake::cli::tool::run(cwd, &args),
-    }
 }
 
 fn dispatch_category(cwd: &Path, command: Option<CategoryCommands>) -> Result<()> {

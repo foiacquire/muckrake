@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS files (
     name TEXT NOT NULL,
     path TEXT NOT NULL UNIQUE,
     sha256 TEXT,
+    fingerprint TEXT,
     mime_type TEXT,
     size INTEGER,
     ingested_at TEXT NOT NULL,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS file_tags (
     file_id INTEGER REFERENCES files(id),
     tag TEXT NOT NULL,
     file_hash TEXT,
+    fingerprint TEXT,
     PRIMARY KEY (file_id, tag)
 );
 

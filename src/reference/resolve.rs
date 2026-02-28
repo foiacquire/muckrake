@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
@@ -52,6 +53,55 @@ pub fn resolve_references(refs: &[Reference], ctx: &Context) -> Result<ResolvedC
     }
 
     Ok(ResolvedCollection { files: all_files })
+}
+
+pub struct ExpandedScope {
+    pub project_name: Option<String>,
+    pub category_name: Option<String>,
+    pub project_root: PathBuf,
+}
+
+pub fn expand_reference_scope(scope: &[ScopeLevel], ctx: &Context) -> Result<Vec<ExpandedScope>> {
+    let pairs = expand_scope(scope, ctx)?;
+    pairs
+        .into_iter()
+        .map(|(project_name, category_name, _db)| {
+            let project_root = derive_project_root(project_name.as_ref(), ctx)?;
+            Ok(ExpandedScope {
+                project_name,
+                category_name,
+                project_root,
+            })
+        })
+        .collect()
+}
+
+fn derive_project_root(project_name: Option<&String>, ctx: &Context) -> Result<PathBuf> {
+    match project_name {
+        None => match ctx {
+            Context::Project { project_root, .. } => Ok(project_root.clone()),
+            _ => bail!("expected project context for unnamed scope"),
+        },
+        Some(name) => resolve_workspace_project_root(name, ctx),
+    }
+}
+
+fn resolve_workspace_project_root(name: &str, ctx: &Context) -> Result<PathBuf> {
+    let (ws_root, ws_db) = match ctx {
+        Context::Project {
+            workspace: Some(ws),
+            ..
+        } => (ws.workspace_root.as_path(), &ws.workspace_db),
+        Context::Workspace {
+            workspace_root,
+            workspace_db,
+        } => (workspace_root.as_path(), workspace_db),
+        _ => bail!("workspace context required for project '{name}'"),
+    };
+    let proj = ws_db
+        .get_project_by_name(name)?
+        .ok_or_else(|| anyhow::anyhow!("project '{name}' not found"))?;
+    Ok(ws_root.join(&proj.path))
 }
 
 fn resolve_single(reference: &Reference, ctx: &Context) -> Result<Vec<ResolvedFile>> {
@@ -193,8 +243,16 @@ fn expand_one_scope<'a>(scope: &[ScopeLevel], ctx: &'a Context) -> Result<ScopeE
         } => {
             let mut results = Vec::new();
             for name in &level.names {
-                let db = open_project_db(workspace_db, workspace_root, name)?;
-                results.push((Some(name.clone()), None, OpenedDb::Owned(db)));
+                if workspace_db.get_project_by_name(name)?.is_some() {
+                    let db = open_project_db(workspace_db, workspace_root, name)?;
+                    results.push((Some(name.clone()), None, OpenedDb::Owned(db)));
+                } else {
+                    let found = find_category_across_projects(workspace_db, workspace_root, name)?;
+                    if found.is_empty() {
+                        bail!("'{name}' is not a project or category in any project");
+                    }
+                    results.extend(found);
+                }
             }
             Ok(results)
         }
@@ -300,6 +358,30 @@ fn is_category_in_project(project_db: &ProjectDb, name: &str) -> Result<bool> {
     Ok(project_db.get_category_by_name(name)?.is_some())
 }
 
+fn find_category_across_projects(
+    workspace_db: &WorkspaceDb,
+    workspace_root: &std::path::Path,
+    category_name: &str,
+) -> Result<ScopeExpansion<'static>> {
+    let projects = workspace_db.list_projects()?;
+    let mut results = Vec::new();
+    for proj in projects {
+        let proj_root = workspace_root.join(&proj.path);
+        let mkrk = proj_root.join(".mkrk");
+        if mkrk.exists() {
+            let db = ProjectDb::open(&mkrk)?;
+            if is_category_in_project(&db, category_name)? {
+                results.push((
+                    Some(proj.name.clone()),
+                    Some(category_name.to_string()),
+                    OpenedDb::Owned(db),
+                ));
+            }
+        }
+    }
+    Ok(results)
+}
+
 fn open_project_db(
     workspace_db: &WorkspaceDb,
     workspace_root: &std::path::Path,
@@ -344,6 +426,7 @@ mod tests {
             name: name.to_string(),
             path: path.to_string(),
             sha256: Some("abc123".to_string()),
+            fingerprint: None,
             mime_type: None,
             size: Some(100),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -477,7 +560,7 @@ mod tests {
             .unwrap();
         db.insert_file(&make_file("memo.pdf", "evidence/memo.pdf"))
             .unwrap();
-        db.insert_tag(id1, "classified", "testhash").unwrap();
+        db.insert_tag(id1, "classified", "testhash", "[]").unwrap();
 
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence!classified", &ctx);
@@ -498,10 +581,10 @@ mod tests {
         let id3 = db
             .insert_file(&make_file("c.pdf", "evidence/c.pdf"))
             .unwrap();
-        db.insert_tag(id1, "classified", "testhash").unwrap();
-        db.insert_tag(id1, "priority", "testhash").unwrap();
-        db.insert_tag(id2, "classified", "testhash").unwrap();
-        db.insert_tag(id3, "priority", "testhash").unwrap();
+        db.insert_tag(id1, "classified", "testhash", "[]").unwrap();
+        db.insert_tag(id1, "priority", "testhash", "[]").unwrap();
+        db.insert_tag(id2, "classified", "testhash", "[]").unwrap();
+        db.insert_tag(id3, "priority", "testhash", "[]").unwrap();
 
         let ctx = make_project_ctx(dir.path());
 

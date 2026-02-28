@@ -131,7 +131,7 @@ impl TriggerFilter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,

@@ -88,10 +88,19 @@ fn walk_dir(
                 continue;
             }
 
-            let file_id = track_file(project_root, project_db, &path, &rel_path)?;
+            let file_id = track_file(project_db, &path, &rel_path)?;
             *count += 1;
 
             if let Ok(Some(file)) = project_db.get_file_by_path(&rel_path) {
+                let protection = project_db
+                    .resolve_protection(&rel_path)
+                    .unwrap_or(ProtectionLevel::Editable);
+                eprintln!(
+                    "  {} [{}]",
+                    rel_path,
+                    protection_label(project_root, &path, protection, file.immutable)
+                );
+
                 let event = RuleEvent {
                     event: TriggerEvent::Ingest,
                     file: Some(&file),
@@ -111,13 +120,8 @@ fn walk_dir(
 }
 
 /// Track a file that already exists on disk inside the project.
-pub fn track_file(
-    project_root: &Path,
-    db: &crate::db::ProjectDb,
-    abs_path: &Path,
-    rel_path: &str,
-) -> Result<i64> {
-    let hash = integrity::hash_file(abs_path)?;
+pub fn track_file(db: &crate::db::ProjectDb, abs_path: &Path, rel_path: &str) -> Result<i64> {
+    let (hash, fingerprint) = integrity::hash_and_fingerprint(abs_path)?;
     let meta = std::fs::metadata(abs_path)?;
     let size = meta.len();
 
@@ -125,7 +129,13 @@ pub fn track_file(
         || "unnamed".to_string(),
         |n| n.to_string_lossy().to_string(),
     );
-    let mime_type = guess_mime(&file_name);
+    let mime_type = guess_mime(&file_name).or_else(|| {
+        if is_executable(&meta) {
+            Some("application/x-executable".to_string())
+        } else {
+            None
+        }
+    });
 
     let protection = db.resolve_protection(rel_path)?;
     let is_immutable = try_set_immutable(abs_path, protection);
@@ -140,6 +150,7 @@ pub fn track_file(
         name: file_name,
         path: rel_path.to_string(),
         sha256: Some(hash),
+        fingerprint: Some(fingerprint.to_json()),
         mime_type,
         size: Some(size as i64),
         ingested_at: Utc::now().to_rfc3339(),
@@ -150,12 +161,6 @@ pub fn track_file(
     let file_id = db.insert_file(&file)?;
     let user = whoami();
     db.insert_audit("ingest", Some(file_id), Some(&user), None)?;
-
-    eprintln!(
-        "  {} [{}]",
-        rel_path,
-        protection_label(project_root, abs_path, protection, is_immutable)
-    );
 
     Ok(file_id)
 }
@@ -185,6 +190,17 @@ fn try_set_immutable(path: &Path, protection: ProtectionLevel) -> bool {
             false
         }
     }
+}
+
+#[cfg(unix)]
+fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_meta: &std::fs::Metadata) -> bool {
+    false
 }
 
 fn guess_mime(filename: &str) -> Option<String> {

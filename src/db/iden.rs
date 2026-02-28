@@ -25,6 +25,7 @@ pub enum Files {
     Name,
     Path,
     Sha256,
+    Fingerprint,
     MimeType,
     Size,
     IngestedAt,
@@ -38,6 +39,7 @@ pub enum FileTags {
     FileId,
     Tag,
     FileHash,
+    Fingerprint,
 }
 
 #[derive(Iden)]

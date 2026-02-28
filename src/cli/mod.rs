@@ -6,6 +6,7 @@ pub mod init;
 pub mod list;
 pub mod pipeline;
 pub mod projects;
+pub mod read;
 pub mod rule;
 pub mod scope;
 pub mod sign;
@@ -72,6 +73,7 @@ pub struct Cli {
 }
 
 #[derive(Clone, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Create a new project or workspace
     Init {
@@ -101,6 +103,24 @@ pub enum Commands {
     List {
         /// References to list (defaults to current project)
         references: Vec<String>,
+        /// Skip fingerprint verification on tag-filtered listings
+        #[arg(long)]
+        no_hash_check: bool,
+    },
+    /// Read file contents by reference
+    Read {
+        /// References to read (at least one required)
+        #[arg(required = true)]
+        references: Vec<String>,
+        /// Show file path before content
+        #[arg(long)]
+        path: bool,
+        /// Show query reference before content
+        #[arg(long)]
+        query: bool,
+        /// Disable all decoration and color
+        #[arg(long)]
+        raw: bool,
     },
     /// Safely view a file (respects protection level)
     View {
@@ -153,11 +173,14 @@ pub enum Commands {
     },
     /// List all projects in the workspace
     Projects,
-    /// Run or manage project-local tools
+    /// Run a project-local tool
     #[command(alias = "t")]
     Tool {
-        #[command(subcommand)]
-        command: ToolCommands,
+        /// Tool name or :project.name reference
+        name: String,
+        /// Arguments to pass to the tool
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Manage project categories
     #[command(alias = "cat")]
@@ -211,51 +234,6 @@ pub enum Commands {
         #[arg(long)]
         pipeline: Option<String>,
     },
-}
-
-#[derive(Clone, Subcommand)]
-pub enum ToolCommands {
-    /// Register a tool in the database
-    Add {
-        /// Tool name (action name: ocr, transcribe, etc.)
-        name: String,
-        /// Command to execute
-        command: String,
-        /// Category scope (e.g., evidence, evidence/financial)
-        #[arg(long)]
-        scope: Option<String>,
-        /// File type filter (e.g., wav, pdf, image/*)
-        #[arg(long = "file-type", default_value = "*")]
-        file_type: String,
-        /// Tag to scope this config to (uses `tag_tool_config` instead)
-        #[arg(long)]
-        tag: Option<String>,
-        /// JSON env var overrides
-        #[arg(long)]
-        env: Option<String>,
-        /// Show command when running (default is quiet)
-        #[arg(long)]
-        verbose: bool,
-    },
-    /// List registered tools
-    List,
-    /// Remove a tool configuration
-    Remove {
-        /// Tool name
-        name: String,
-        /// Category scope to match
-        #[arg(long)]
-        scope: Option<String>,
-        /// File type to match
-        #[arg(long = "file-type")]
-        file_type: Option<String>,
-        /// Tag to match (removes from `tag_tool_config`)
-        #[arg(long)]
-        tag: Option<String>,
-    },
-    /// Run a tool by name (default when no subcommand matches)
-    #[command(external_subcommand)]
-    Run(Vec<String>),
 }
 
 #[derive(Clone, Subcommand)]

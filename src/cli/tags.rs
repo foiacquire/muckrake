@@ -46,9 +46,10 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let abs_path = project_root.join(&file.path);
-    let hash = integrity::hash_file(&abs_path)?;
+    let (hash, fingerprint) = integrity::hash_and_fingerprint(&abs_path)?;
+    let fp_json = fingerprint.to_json();
 
-    project_db.insert_tag(file_id, tag, &hash)?;
+    project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
 
     let short_hash = &hash[..10];
     eprintln!(
@@ -123,6 +124,45 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
 }
 
 fn format_tag_status(
+    project_db: &crate::db::ProjectDb,
+    project_root: &Path,
+    file_id: i64,
+    tag: &str,
+    file_path: &str,
+) -> String {
+    let stored_fp = match project_db.get_file_tag_fingerprint(file_id, tag) {
+        Ok(Some(fp)) => fp,
+        Ok(None) => return format_tag_status_sha256(project_db, project_root, file_id, tag, file_path),
+        Err(_) => return format!(" {}", style("(lookup failed)").red()),
+    };
+
+    let Ok(expected) = integrity::Fingerprint::from_json(&stored_fp) else {
+        return format_tag_status_sha256(project_db, project_root, file_id, tag, file_path);
+    };
+
+    let abs_path = project_root.join(file_path);
+    match integrity::verify_fingerprint(&abs_path, &expected) {
+        Ok(integrity::FingerprintResult::Ok) => format!(" {}", style("✓").green()),
+        Ok(integrity::FingerprintResult::Modified { changed }) => {
+            let n = changed.len();
+            let detail = if n == 1 {
+                format!("chunk {} changed", changed[0].index)
+            } else {
+                format!("{n} chunks changed")
+            };
+            format!(
+                " {}",
+                style(format!("⚠ file modified since tagging ({detail})")).yellow()
+            )
+        }
+        Ok(integrity::FingerprintResult::Missing) => {
+            format!(" {}", style("✗ file missing").red())
+        }
+        Err(_) => format!(" {}", style("(verify failed)").red()),
+    }
+}
+
+fn format_tag_status_sha256(
     project_db: &crate::db::ProjectDb,
     project_root: &Path,
     file_id: i64,

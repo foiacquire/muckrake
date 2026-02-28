@@ -87,40 +87,94 @@ fn verify_files(
             continue;
         };
 
-        let file_path = project_root.join(&file.path);
-        let result = integrity::verify_file(&file_path, expected_hash)?;
+        let abs_path = project_root.join(&file.path);
+        let result = integrity::verify_file(&abs_path, expected_hash)?;
 
-        print_verify_result(&result, &file.path);
+        print_verify_result(&result, &abs_path, &file.path, file.fingerprint.as_deref());
         match result {
-            VerifyResult::Ok => counts.ok += 1,
+            VerifyResult::Ok => {
+                counts.ok += 1;
+                counts.fixed += backfill_fingerprint(file, &abs_path, project_db)?;
+            }
             VerifyResult::Modified { .. } => counts.modified += 1,
             VerifyResult::Missing => counts.missing += 1,
         }
 
-        counts.fixed += check_immutable_flag(file, &file_path, project_db)?;
+        counts.fixed += check_immutable_flag(file, &abs_path, project_db)?;
     }
 
     Ok(counts)
 }
 
-fn print_verify_result(result: &VerifyResult, path: &str) {
+fn print_verify_result(
+    result: &VerifyResult,
+    abs_path: &Path,
+    rel_path: &str,
+    fingerprint: Option<&str>,
+) {
     match result {
         VerifyResult::Ok => {
-            eprintln!("  {} {path}", style("✓").green());
+            eprintln!("  {} {rel_path}", style("✓").green());
         }
         VerifyResult::Modified { expected, actual } => {
             eprintln!(
                 "  {} {} MODIFIED",
                 style("✗").red().bold(),
-                style(path).red()
+                style(rel_path).red()
             );
             eprintln!("    expected: {}", style(expected).dim());
             eprintln!("    actual:   {}", style(actual).dim());
+            print_chunk_diff(abs_path, fingerprint);
         }
         VerifyResult::Missing => {
-            eprintln!("  {} {} MISSING", style("?").yellow(), style(path).yellow());
+            eprintln!(
+                "  {} {} MISSING",
+                style("?").yellow(),
+                style(rel_path).yellow()
+            );
         }
     }
+}
+
+fn print_chunk_diff(abs_path: &Path, fingerprint: Option<&str>) {
+    let Some(fp_json) = fingerprint else {
+        return;
+    };
+    let Ok(expected) = integrity::Fingerprint::from_json(fp_json) else {
+        return;
+    };
+    if let Ok(integrity::FingerprintResult::Modified { changed }) =
+        integrity::verify_fingerprint(abs_path, &expected)
+    {
+        let ranges: Vec<String> = changed
+            .iter()
+            .map(|c| format!("chunk {} (offset {})", c.index, c.offset))
+            .collect();
+        eprintln!("    changed: {}", style(ranges.join(", ")).dim());
+    }
+}
+
+fn backfill_fingerprint(
+    file: &TrackedFile,
+    abs_path: &Path,
+    project_db: &ProjectDb,
+) -> Result<u32> {
+    if file.fingerprint.is_some() {
+        return Ok(0);
+    }
+    let file_id = file.id.unwrap_or(0);
+    if file_id == 0 {
+        return Ok(0);
+    }
+    let fp = integrity::fingerprint_file(abs_path)?;
+    project_db.update_file_fingerprint(file_id, &fp.to_json())?;
+    eprintln!(
+        "  {} {} stored fingerprint ({})",
+        style("+").cyan(),
+        file.path,
+        fp
+    );
+    Ok(1)
 }
 
 fn check_immutable_flag(

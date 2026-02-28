@@ -77,7 +77,7 @@ pub fn run_assign(cwd: &Path, file: &str, project: &str, category: Option<&str>)
     std::fs::copy(&file_path, &dest_path)?;
 
     let proj_db = ProjectDb::open(&proj_mkrk)?;
-    crate::cli::ingest::track_file(&proj_root, &proj_db, &dest_path, &dest_rel)?;
+    crate::cli::ingest::track_file(&proj_db, &dest_path, &dest_rel)?;
 
     std::fs::remove_file(&file_path)?;
     eprintln!("Removed {file} from inbox");

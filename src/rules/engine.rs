@@ -108,7 +108,10 @@ fn matches_filter(filter: &TriggerFilter, event: &RuleEvent<'_>, db: &ProjectDb)
             return false;
         };
         let ext = file_extension(rel_path);
-        if !ext.eq_ignore_ascii_case(ft) {
+        let matches_any = ft
+            .split(',')
+            .any(|candidate| ext.eq_ignore_ascii_case(candidate.trim()));
+        if !matches_any {
             return false;
         }
     }
@@ -251,8 +254,9 @@ fn action_add_tag(
     let (file, file_id, rel_path) = require_file_context(event)?;
     let tag = rule.action_config.tag.as_deref().unwrap_or("unknown");
     let abs_path = ctx.project_root.join(rel_path);
-    let hash = integrity::hash_file(&abs_path)?;
-    ctx.project_db.insert_tag(file_id, tag, &hash)?;
+    let (hash, fingerprint) = integrity::hash_and_fingerprint(&abs_path)?;
+    let fp_json = fingerprint.to_json();
+    ctx.project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
     eprintln!("    tagged '{}' with '{tag}'", file.name);
     cascade_tag_event(event, TriggerEvent::Tag, tag, ctx, fired)
 }
@@ -516,6 +520,7 @@ mod tests {
             name: name.to_string(),
             path: path.to_string(),
             sha256: None,
+            fingerprint: None,
             mime_type: mime_type.map(String::from),
             size: None,
             ingested_at: String::new(),
@@ -550,6 +555,7 @@ mod tests {
             name: name.to_string(),
             path: path.to_string(),
             sha256: None,
+            fingerprint: None,
             mime_type: mime_type.map(String::from),
             size: Some(size),
             ingested_at: String::new(),
@@ -834,7 +840,8 @@ mod tests {
     #[test]
     fn evaluate_rules_remove_tag_action() {
         let (dir, db, file_id) = setup_file_env_with("test.pdf", b"fake pdf", None);
-        db.insert_tag(file_id, "needs-review", "fakehash").unwrap();
+        db.insert_tag(file_id, "needs-review", "fakehash", "[]")
+            .unwrap();
 
         let mut rule = make_rule(
             "clear-review",
@@ -1458,5 +1465,53 @@ mod tests {
         assert_eq!(fired.len(), 1);
         let attachments = db.list_attachments_for_pipeline(pipeline_id).unwrap();
         assert_eq!(attachments.len(), 1);
+    }
+
+    #[test]
+    fn filter_file_type_comma_separated() {
+        let filter = TriggerFilter {
+            file_type: Some("py,sh,bash".to_string()),
+            ..Default::default()
+        };
+        let file = make_test_file("tool.py", "tools/tool.py", None);
+        let (_dir, db) = setup_db();
+
+        let event_py = make_event(&file, 1, "tools/tool.py", TriggerEvent::Ingest, None);
+        assert!(matches_filter(&filter, &event_py, &db));
+
+        let event_sh = make_event(&file, 1, "tools/run.sh", TriggerEvent::Ingest, None);
+        assert!(matches_filter(&filter, &event_sh, &db));
+
+        let event_bash = make_event(&file, 1, "tools/run.bash", TriggerEvent::Ingest, None);
+        assert!(matches_filter(&filter, &event_bash, &db));
+
+        let event_rb = make_event(&file, 1, "tools/run.rb", TriggerEvent::Ingest, None);
+        assert!(!matches_filter(&filter, &event_rb, &db));
+    }
+
+    #[test]
+    fn filter_file_type_comma_case_insensitive() {
+        let filter = TriggerFilter {
+            file_type: Some("PY,SH".to_string()),
+            ..Default::default()
+        };
+        let file = make_test_file("tool.py", "tools/tool.py", None);
+        let (_dir, db) = setup_db();
+
+        let event = make_event(&file, 1, "tools/tool.py", TriggerEvent::Ingest, None);
+        assert!(matches_filter(&filter, &event, &db));
+    }
+
+    #[test]
+    fn filter_file_type_comma_with_spaces() {
+        let filter = TriggerFilter {
+            file_type: Some("py, sh, bash".to_string()),
+            ..Default::default()
+        };
+        let file = make_test_file("tool.sh", "tools/tool.sh", None);
+        let (_dir, db) = setup_db();
+
+        let event = make_event(&file, 1, "tools/tool.sh", TriggerEvent::Ingest, None);
+        assert!(matches_filter(&filter, &event, &db));
     }
 }

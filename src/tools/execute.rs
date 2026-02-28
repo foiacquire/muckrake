@@ -20,7 +20,13 @@ pub struct ExecuteToolParams<'a> {
     pub workspace_db: Option<&'a WorkspaceDb>,
 }
 
-pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
+struct ResolvedTool {
+    command: String,
+    env: Option<String>,
+    quiet: bool,
+}
+
+fn resolve_execution_tool(params: &ExecuteToolParams<'_>) -> Result<ResolvedTool> {
     let scope_chain = params
         .file_rel_path
         .map(build_scope_chain)
@@ -35,23 +41,28 @@ pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
     };
 
     let candidate = resolve_tool(&lookup, params.project_db, params.workspace_db)?;
-    let Some(candidate) = candidate else {
-        bail!(
-            "no tool '{}' found{}",
-            params.tool_name,
-            params
-                .file_rel_path
-                .map_or(String::new(), |p| format!(" for file '{p}'"))
-        );
-    };
 
-    let env_map = build_tool_env(
-        candidate.env.as_deref(),
-        &candidate.command,
-        candidate.quiet,
-    )?;
+    if let Some(c) = candidate {
+        return Ok(ResolvedTool {
+            command: c.command,
+            env: c.env,
+            quiet: c.quiet,
+        });
+    }
+    bail!(
+        "no tool '{}' found{}",
+        params.tool_name,
+        params
+            .file_rel_path
+            .map_or(String::new(), |p| format!(" for file '{p}'"))
+    );
+}
 
-    let mut cmd = Command::new(&candidate.command);
+pub fn execute_tool(params: &ExecuteToolParams<'_>) -> Result<()> {
+    let resolved = resolve_execution_tool(params)?;
+    let env_map = build_tool_env(resolved.env.as_deref(), &resolved.command, resolved.quiet)?;
+
+    let mut cmd = Command::new(&resolved.command);
     if let Some(abs_path) = params.file_abs_path {
         cmd.arg(abs_path.to_string_lossy().as_ref());
     }
