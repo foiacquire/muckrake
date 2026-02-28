@@ -57,6 +57,48 @@ jobs:
           restore-keys: test-${{ matrix.os }}-
       - run: cargo test
 
+  smoketest:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: smoketest-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: smoketest-
+      - name: Build musl binary
+        run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: Verify static linking
+        run: |
+          file target/x86_64-unknown-linux-musl/release/mkrk
+          file target/x86_64-unknown-linux-musl/release/mkrk | grep -qE "statically linked|static-pie linked"
+      - name: Smoke test in Alpine
+        run: |
+          docker run --rm \
+            -v "$(pwd)/target/x86_64-unknown-linux-musl/release/mkrk:/usr/local/bin/mkrk:ro" \
+            alpine:latest \
+            sh -c '
+              set -eu
+              mkdir -p /tmp/testproject && cd /tmp/testproject
+              mkrk --version
+              mkrk init -n
+              test -f .mkrk
+              mkrk category add docs --pattern "*.txt"
+              echo "smoke test" > doc.txt
+              mkrk ingest
+              mkrk verify
+              echo "PASS: musl smoke test"
+            '
+
   jscpd:
     name: Duplication
     runs-on: ubuntu-latest
