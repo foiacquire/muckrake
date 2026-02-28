@@ -2,7 +2,7 @@
 
 **IMPORTANT:** This project is pre-stable. It is pre-alpha software. It is
 designed as much as possible to respect and even reinforce the safety of your
-data. With that sai,d bugs will exist. Do NOT use it on mission critical data
+data. With that said, bugs will exist. Do NOT use it on mission critical data
 without backups. It is not stable enough to recommend without backups.
 
 Chain-of-custody research management CLI for investigative journalism.
@@ -31,8 +31,8 @@ mkrk init
 mkrk init --workspace projects/
 mkrk init myproject          # creates projects/myproject/.mkrk
 
-# Ingest a file (copies it, hashes it, tracks it)
-mkrk ingest document.pdf --as evidence
+# Ingest files (hashes, fingerprints, tracks)
+mkrk ingest
 
 # Verify integrity of all tracked files
 mkrk verify
@@ -40,14 +40,19 @@ mkrk verify
 # Tag files for organization
 mkrk tag document.pdf classified
 
-# View or edit tracked files (respects protection levels)
-mkrk view document.pdf
-mkrk edit notes.md
+# Read file contents
+mkrk read evidence/report.pdf
 
 # List files, optionally filtered by reference
 mkrk list
 mkrk list :evidence
 mkrk list :evidence!classified
+
+# Track file state through pipelines
+mkrk pipeline add --name editorial --states draft,review,published
+mkrk pipeline attach --pipeline editorial --category evidence
+mkrk sign evidence/report.pdf review --pipeline editorial
+mkrk state evidence/report.pdf
 ```
 
 ## Projects
@@ -134,17 +139,26 @@ immutable, a child category cannot downgrade it to editable.
 
 ## Files
 
-Files are ingested into a project with `mkrk ingest`. Ingestion copies the
-file, computes a SHA-256 hash, records metadata (name, path, size, MIME type,
-timestamp), stores provenance, applies the protection level from matching
-categories, and logs the operation in the audit trail.
+Files are ingested into a project with `mkrk ingest`. Ingestion computes a
+SHA-256 hash and a chunk-based fingerprint, records metadata (name, path, size,
+MIME type, timestamp), stores provenance, applies the protection level from
+matching categories, and logs the operation in the audit trail.
 
 ```sh
+mkrk ingest
 mkrk ingest document.pdf --as evidence
 mkrk ingest recording.wav --as evidence/audio
 ```
 
 ## Integrity verification
+
+`mkrk` uses a two-tier integrity model:
+
+- **Fingerprint** (fast) — 64KB chunks hashed with BLAKE3. Used for bulk
+  operations like tag queries and listings. Catches file swaps and most
+  modifications at minimal I/O cost.
+- **SHA-256** (full) — Cryptographic hash of entire file contents. Used for
+  single-file operations where authenticity matters: verify, sign, view, edit.
 
 `mkrk verify` checks every tracked file against its stored SHA-256 hash and
 reports:
@@ -156,6 +170,23 @@ reports:
 For immutable files, verification also checks whether the filesystem immutable
 flag is still set.
 
+Tag queries verify fingerprints by default. Use `--no-hash-check` to skip
+verification for faster bulk operations.
+
+## Reading files
+
+`mkrk read` streams file contents to stdout:
+
+```sh
+mkrk read evidence/report.pdf
+mkrk read :evidence/*.txt         # multiple files via reference
+mkrk read report.txt --path       # show file path before content
+mkrk read report.txt --raw        # no color or decoration
+```
+
+Binary files are detected automatically and display size instead of dumping
+contents. Files that exist on disk but aren't tracked are auto-ingested.
+
 ## Tags
 
 Tags are arbitrary string labels attached to files. They serve two purposes:
@@ -165,12 +196,123 @@ Tags are arbitrary string labels attached to files. They serve two purposes:
 - **Tool resolution** — Tool configs can be scoped to tags, so tagged files
   use different tools than untagged ones.
 
+Tagging always fingerprints the file, binding the tag to the file's content.
+Querying by tag verifies the fingerprint against disk to detect tampering.
+
 ```sh
 mkrk tag document.pdf classified
 mkrk untag document.pdf classified
 mkrk tags                          # list all tags
 mkrk tags document.pdf             # list tags on a file
 ```
+
+## Pipelines
+
+Pipelines are named state machines that track file progression through stages.
+
+```sh
+mkrk pipeline add --name editorial --states draft,review,published
+mkrk pipeline list
+mkrk pipeline remove editorial
+```
+
+States form an ordered chain. The first state is the initial state (no
+transition into it). By default, transitions are linear — each non-initial
+state requires a sign with its own name. Custom transitions support multi-sign
+gates:
+
+```sh
+mkrk pipeline add --name approval \
+  --states draft,reviewed,published \
+  --transitions '{"reviewed":["editor"],"published":["editor","legal"]}'
+```
+
+Here, reaching `published` requires both `editor` and `legal` signs.
+
+### Attaching pipelines
+
+Pipelines attach to categories or tags. A file inherits all pipelines from its
+matching categories and tags:
+
+```sh
+mkrk pipeline attach --pipeline editorial --category evidence
+mkrk pipeline attach --pipeline classification --tag classified
+mkrk pipeline detach --pipeline editorial --category evidence
+```
+
+## Signs
+
+Signs are hash-bound attestations that a file has reached a pipeline stage.
+They bind to the file's content — if the file is modified after signing, the
+sign goes stale and the file regresses in the pipeline.
+
+```sh
+mkrk sign evidence/report.pdf review --pipeline editorial
+mkrk unsign evidence/report.pdf review --pipeline editorial
+mkrk signs                            # list all signs
+mkrk signs evidence/report.pdf        # signs on a specific file
+```
+
+Optional GPG signatures provide cryptographic proof of who signed:
+
+```sh
+mkrk sign evidence/report.pdf review --pipeline editorial --gpg
+```
+
+### File state
+
+A file's state in a pipeline is derived from its valid signs each time it's
+queried — state is computed, not stored. Revoking or staling a sign instantly
+changes the file's computed state.
+
+```sh
+mkrk state evidence/report.pdf
+mkrk state :evidence --pipeline editorial
+```
+
+## Rules
+
+Rules are event-driven automations: when a trigger event occurs and filters
+match, an action fires.
+
+```sh
+mkrk rule add --name auto-tag-pdfs \
+  --on ingest --file-type pdf \
+  --action add-tag --tag needs-ocr
+
+mkrk rule add --name sign-on-review \
+  --on state-change --trigger-pipeline editorial --trigger-state reviewed \
+  --action run-tool --tool notify-editor
+
+mkrk rule list
+mkrk rule remove auto-tag-pdfs
+mkrk rule enable auto-tag-pdfs
+mkrk rule disable auto-tag-pdfs
+```
+
+### Trigger events
+
+`ingest`, `tag`, `untag`, `categorize`, `sign`, `state-change`,
+`project-enter`, `workspace-enter`
+
+### Actions
+
+`run-tool`, `add-tag`, `remove-tag`, `sign`, `unsign`, `attach-pipeline`,
+`detach-pipeline`
+
+### Filters
+
+All optional. Missing filter matches everything. Multiple filters are ANDed.
+
+- `--category` — File must be in this category
+- `--mime-type` — Wildcard supported (e.g., `image/*`)
+- `--file-type` — File extension filter
+- `--trigger-tag` — Which tag triggered the event (for tag/untag events)
+- `--trigger-pipeline`, `--trigger-sign`, `--trigger-state` — For sign and
+  state-change events
+
+Rules fire in priority order (lower first) and each rule fires at most once per
+event to prevent loops.
 
 ## Reference syntax
 
@@ -292,10 +434,10 @@ variables as JSON. Removing proxy variables requires explicit confirmation.
 
 ## Audit log
 
-Every significant operation (ingest, verify, categorize, edit, tool execution)
-is recorded in the audit log with a timestamp, operation type, affected file,
-user, and optional detail JSON. This provides an evidence trail for
-chain-of-custody documentation.
+Every significant operation (ingest, verify, categorize, edit, tool execution,
+sign, rule fire) is recorded in the audit log with a timestamp, operation type,
+affected file, user, and optional detail JSON. This provides an evidence trail
+for chain-of-custody documentation.
 
 ## License
 
