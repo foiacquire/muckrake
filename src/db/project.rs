@@ -460,11 +460,7 @@ impl ProjectDb {
         }
     }
 
-    pub fn get_file_tag_fingerprint(
-        &self,
-        file_id: i64,
-        tag: &str,
-    ) -> Result<Option<String>> {
+    pub fn get_file_tag_fingerprint(&self, file_id: i64, tag: &str) -> Result<Option<String>> {
         let (sql, values) = Query::select()
             .column(FileTags::Fingerprint)
             .from(FileTags::Table)

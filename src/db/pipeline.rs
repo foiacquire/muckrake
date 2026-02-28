@@ -341,33 +341,8 @@ pub fn migrate_pipeline_tables(conn: &Connection) -> Result<()> {
         migrate_signs_source_column(conn)?;
         return Ok(());
     }
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS pipelines (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            states TEXT NOT NULL,
-            transitions TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS pipeline_attachments (
-            id INTEGER PRIMARY KEY,
-            pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
-            scope_type TEXT NOT NULL,
-            scope_value TEXT NOT NULL,
-            UNIQUE(pipeline_id, scope_type, scope_value)
-        );
-        CREATE TABLE IF NOT EXISTS signs (
-            id INTEGER PRIMARY KEY,
-            pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
-            file_id INTEGER NOT NULL REFERENCES files(id),
-            file_hash TEXT NOT NULL,
-            sign_name TEXT NOT NULL,
-            signer TEXT NOT NULL,
-            signed_at TEXT NOT NULL,
-            signature TEXT,
-            revoked_at TEXT,
-            source TEXT
-        );",
-    )?;
+    conn.execute_batch(super::schema::PIPELINE_TABLES_SCHEMA)?;
+    migrate_signs_source_column(conn)?;
     Ok(())
 }
 

@@ -37,7 +37,7 @@ fn create_test_file(dir: &Path, name: &str, content: &str) -> String {
     let test_dir = dir.join("test");
     fs::create_dir_all(&test_dir).unwrap();
     fs::write(test_dir.join(name), content).unwrap();
-    format!("test/{name}")
+    Path::new("test").join(name).to_string_lossy().into_owned()
 }
 
 // --- Binary startup ---
@@ -46,8 +46,7 @@ fn create_test_file(dir: &Path, name: &str, content: &str) -> String {
 fn binary_runs() {
     let mut cmd: Command = cargo_bin_cmd!("mkrk").into();
     cmd.arg("--version");
-    cmd
-        .assert()
+    cmd.assert()
         .success()
         .stdout(predicate::str::contains("mkrk"));
 }
@@ -57,10 +56,7 @@ fn binary_runs() {
 #[test]
 fn init_creates_project() {
     let (tmp, project) = project_dir();
-    mkrk(&project)
-        .arg("init")
-        .assert()
-        .success();
+    mkrk(&project).arg("init").assert().success();
     assert!(project.join(".mkrk").exists());
     assert!(project.join("evidence").exists());
     assert!(project.join("sources").exists());
@@ -72,10 +68,7 @@ fn init_creates_project() {
 #[test]
 fn init_no_categories() {
     let (tmp, project) = project_dir();
-    mkrk(&project)
-        .args(["init", "-n"])
-        .assert()
-        .success();
+    mkrk(&project).args(["init", "-n"]).assert().success();
     assert!(project.join(".mkrk").exists());
     assert!(!project.join("evidence").exists());
     assert!(!project.join("sources").exists());
@@ -99,10 +92,7 @@ fn init_refuses_double() {
 #[test]
 fn status_after_init() {
     let (_tmp, project) = init_test_project();
-    mkrk(&project)
-        .arg("status")
-        .assert()
-        .success();
+    mkrk(&project).arg("status").assert().success();
 }
 
 // --- Category ---
@@ -143,8 +133,10 @@ fn list_by_category() {
     mkrk(&project)
         .args([
             "init",
-            "--category", "alpha/**:editable",
-            "--category", "beta/**:editable",
+            "--category",
+            "alpha/**:editable",
+            "--category",
+            "beta/**:editable",
         ])
         .assert()
         .success();
@@ -160,10 +152,7 @@ fn list_by_category() {
         .args(["list", ":alpha"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("a.txt")
-                .and(predicate::str::contains("b.txt").not()),
-        );
+        .stdout(predicate::str::contains("a.txt").and(predicate::str::contains("b.txt").not()));
     drop(tmp);
 }
 
@@ -209,6 +198,14 @@ fn verify_fails_missing() {
 
 // --- Tags ---
 
+fn assert_file_tags(project: &Path, file: &str, pred: impl predicates::Predicate<str>) {
+    mkrk(project)
+        .args(["tags", file, "--no-hash-check"])
+        .assert()
+        .success()
+        .stdout(pred);
+}
+
 #[test]
 fn tag_and_list_tags() {
     let (_tmp, project) = init_test_project();
@@ -220,11 +217,7 @@ fn tag_and_list_tags() {
         .assert()
         .success();
 
-    mkrk(&project)
-        .args(["tags", &rel, "--no-hash-check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("important"));
+    assert_file_tags(&project, &rel, predicate::str::contains("important"));
 }
 
 #[test]
@@ -243,9 +236,5 @@ fn untag_removes_tag() {
         .assert()
         .success();
 
-    mkrk(&project)
-        .args(["tags", &rel, "--no-hash-check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("removeme").not());
+    assert_file_tags(&project, &rel, predicate::str::contains("removeme").not());
 }

@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS rules (
 );
 ";
 
-const PIPELINE_TABLES_SCHEMA: &str = "
+pub(super) const PIPELINE_TABLES_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS pipelines (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

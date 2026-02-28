@@ -176,23 +176,8 @@ pub enum FingerprintResult {
 }
 
 pub fn fingerprint_file(path: &Path) -> Result<Fingerprint> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut reader = std::io::BufReader::with_capacity(CHUNK_SIZE, file);
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut chunks = Vec::new();
-
-    loop {
-        let n = read_full_chunk(&mut reader, &mut buf)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        let hash = blake3::hash(&buf[..n]);
-        chunks.push(hex::encode(&hash.as_bytes()[..CHUNK_HASH_BYTES]));
-    }
-
-    Ok(Fingerprint(chunks))
+    let (_sha256, fp) = hash_and_fingerprint(path)?;
+    Ok(fp)
 }
 
 pub fn hash_and_fingerprint(path: &Path) -> Result<(String, Fingerprint)> {
@@ -294,12 +279,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn verify_ok() {
+    fn hello_world_tempfile() -> NamedTempFile {
         let mut tmp = NamedTempFile::new().unwrap();
         write!(tmp, "hello world").unwrap();
         tmp.flush().unwrap();
+        tmp
+    }
 
+    #[test]
+    fn verify_ok() {
+        let tmp = hello_world_tempfile();
         let result = verify_file(
             tmp.path(),
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
@@ -310,10 +299,7 @@ mod tests {
 
     #[test]
     fn verify_modified() {
-        let mut tmp = NamedTempFile::new().unwrap();
-        write!(tmp, "hello world").unwrap();
-        tmp.flush().unwrap();
-
+        let tmp = hello_world_tempfile();
         let result = verify_file(tmp.path(), "0000000000000000").unwrap();
         assert!(matches!(result, VerifyResult::Modified { .. }));
     }

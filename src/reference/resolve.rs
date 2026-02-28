@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Result};
 
 use crate::context::Context;
-use crate::db::{ProjectDb, WorkspaceDb};
+use crate::db::{ProjectDb, ProjectRow, WorkspaceDb};
 use crate::models::TrackedFile;
 
 use super::types::{Reference, ScopeLevel, TagFilter};
@@ -358,25 +358,35 @@ fn is_category_in_project(project_db: &ProjectDb, name: &str) -> Result<bool> {
     Ok(project_db.get_category_by_name(name)?.is_some())
 }
 
+fn open_all_workspace_project_dbs(
+    workspace_db: &WorkspaceDb,
+    workspace_root: &std::path::Path,
+) -> Result<Vec<(ProjectRow, ProjectDb)>> {
+    let projects = workspace_db.list_projects()?;
+    let mut opened = Vec::new();
+    for proj in projects {
+        let mkrk = workspace_root.join(&proj.path).join(".mkrk");
+        if mkrk.exists() {
+            let db = ProjectDb::open(&mkrk)?;
+            opened.push((proj, db));
+        }
+    }
+    Ok(opened)
+}
+
 fn find_category_across_projects(
     workspace_db: &WorkspaceDb,
     workspace_root: &std::path::Path,
     category_name: &str,
 ) -> Result<ScopeExpansion<'static>> {
-    let projects = workspace_db.list_projects()?;
     let mut results = Vec::new();
-    for proj in projects {
-        let proj_root = workspace_root.join(&proj.path);
-        let mkrk = proj_root.join(".mkrk");
-        if mkrk.exists() {
-            let db = ProjectDb::open(&mkrk)?;
-            if is_category_in_project(&db, category_name)? {
-                results.push((
-                    Some(proj.name.clone()),
-                    Some(category_name.to_string()),
-                    OpenedDb::Owned(db),
-                ));
-            }
+    for (proj, db) in open_all_workspace_project_dbs(workspace_db, workspace_root)? {
+        if is_category_in_project(&db, category_name)? {
+            results.push((
+                Some(proj.name.clone()),
+                Some(category_name.to_string()),
+                OpenedDb::Owned(db),
+            ));
         }
     }
     Ok(results)
@@ -399,17 +409,12 @@ fn expand_all_workspace_projects(
     workspace_db: &WorkspaceDb,
     workspace_root: &std::path::Path,
 ) -> Result<ScopeExpansion<'static>> {
-    let projects = workspace_db.list_projects()?;
-    let mut results = Vec::new();
-    for proj in projects {
-        let proj_root = workspace_root.join(&proj.path);
-        let mkrk = proj_root.join(".mkrk");
-        if mkrk.exists() {
-            let db = ProjectDb::open(&mkrk)?;
-            results.push((Some(proj.name), None, OpenedDb::Owned(db)));
-        }
-    }
-    Ok(results)
+    Ok(
+        open_all_workspace_project_dbs(workspace_db, workspace_root)?
+            .into_iter()
+            .map(|(proj, db)| (Some(proj.name), None, OpenedDb::Owned(db)))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

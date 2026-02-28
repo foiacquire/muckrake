@@ -132,7 +132,9 @@ fn format_tag_status(
 ) -> String {
     let stored_fp = match project_db.get_file_tag_fingerprint(file_id, tag) {
         Ok(Some(fp)) => fp,
-        Ok(None) => return format_tag_status_sha256(project_db, project_root, file_id, tag, file_path),
+        Ok(None) => {
+            return format_tag_status_sha256(project_db, project_root, file_id, tag, file_path)
+        }
         Err(_) => return format!(" {}", style("(lookup failed)").red()),
     };
 
