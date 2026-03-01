@@ -3,7 +3,7 @@ set -eu
 
 MUSL_TARGET="x86_64-unknown-linux-musl"
 BINARY="target/${MUSL_TARGET}/release/mkrk"
-CONTAINER_RT="${CONTAINER_RT:-$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || true)}"
+CONTAINER_RT="${CONTAINER_RT:-$(command -v docker 2>/dev/null || command -v podman 2>/dev/null || true)}"
 
 if [ -z "$CONTAINER_RT" ]; then
     echo "SKIP: no container runtime (podman or docker) found" >&2
