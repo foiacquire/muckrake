@@ -7,6 +7,7 @@ use crate::context::Context;
 use crate::db::{ProjectDb, ProjectRow, WorkspaceDb};
 use crate::models::TrackedFile;
 
+use super::parse::parse_reference;
 use super::types::{Reference, ScopeLevel, TagFilter};
 
 type ScopeExpansion<'a> = Vec<(Option<String>, Option<String>, OpenedDb<'a>)>;
@@ -53,6 +54,19 @@ pub fn resolve_references(refs: &[Reference], ctx: &Context) -> Result<ResolvedC
     }
 
     Ok(ResolvedCollection { files: all_files })
+}
+
+/// Resolve a single-file reference string to its `TrackedFile` and database id.
+///
+/// Parses the reference, resolves it against the context, asserts exactly one
+/// file matched, and extracts the required database id.
+pub fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(TrackedFile, i64)> {
+    let parsed = parse_reference(reference)?;
+    let collection = resolve_references(&[parsed], ctx)?;
+    let resolved = collection.expect_one(reference)?;
+    let file = resolved.file;
+    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    Ok((file, file_id))
 }
 
 pub struct ExpandedScope {

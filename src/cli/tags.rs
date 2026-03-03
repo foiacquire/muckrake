@@ -7,7 +7,7 @@ use console::style;
 use crate::context::{discover, Context};
 use crate::integrity;
 use crate::models::{TrackedFile, TriggerEvent};
-use crate::reference::{format_ref, parse_reference, resolve_references};
+use crate::reference::{format_ref, resolve_file_ref};
 use crate::rules::RuleEvent;
 
 fn fire_tag_event(
@@ -29,15 +29,6 @@ fn fire_tag_event(
         new_state: None,
     };
     crate::rules::fire_rules(ctx, &event);
-}
-
-fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(TrackedFile, i64)> {
-    let parsed = parse_reference(reference)?;
-    let collection = resolve_references(&[parsed], ctx)?;
-    let resolved = collection.expect_one(reference)?;
-    let file = resolved.file;
-    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
-    Ok((file, file_id))
 }
 
 pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
@@ -87,7 +78,7 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
     if no_hash_check {
         eprintln!(
             "{}",
-            style("warning: hash verification skipped — stale tags will not be detected").yellow()
+            style("warning: hash verification skipped -- stale tags will not be detected").yellow()
         );
     }
 
@@ -147,7 +138,7 @@ fn format_tag_status(
 
     let abs_path = project_root.join(file_path);
     match integrity::verify_fingerprint(&abs_path, &expected) {
-        Ok(integrity::FingerprintResult::Ok) => format!(" {}", style("✓").green()),
+        Ok(integrity::FingerprintResult::Ok) => format!(" {}", style("\u{2713}").green()),
         Ok(integrity::FingerprintResult::Modified { changed }) => {
             let n = changed.len();
             let detail = if n == 1 {
@@ -157,11 +148,11 @@ fn format_tag_status(
             };
             format!(
                 " {}",
-                style(format!("⚠ file modified since tagging ({detail})")).yellow()
+                style(format!("\u{26A0} file modified since tagging ({detail})")).yellow()
             )
         }
         Ok(integrity::FingerprintResult::Missing) => {
-            format!(" {}", style("✗ file missing").red())
+            format!(" {}", style("\u{2717} file missing").red())
         }
         Err(_) => format!(" {}", style("(verify failed)").red()),
     }
@@ -182,12 +173,15 @@ fn format_tag_status_sha256(
 
     let abs_path = project_root.join(file_path);
     match integrity::verify_file(&abs_path, &stored_hash) {
-        Ok(integrity::VerifyResult::Ok) => format!(" {}", style("✓").green()),
+        Ok(integrity::VerifyResult::Ok) => format!(" {}", style("\u{2713}").green()),
         Ok(integrity::VerifyResult::Modified { .. }) => {
-            format!(" {}", style("⚠ file modified since tagging").yellow())
+            format!(
+                " {}",
+                style("\u{26A0} file modified since tagging").yellow()
+            )
         }
         Ok(integrity::VerifyResult::Missing) => {
-            format!(" {}", style("✗ file missing").red())
+            format!(" {}", style("\u{2717} file missing").red())
         }
         Err(_) => format!(" {}", style("(verify failed)").red()),
     }

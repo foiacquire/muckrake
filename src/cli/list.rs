@@ -6,11 +6,11 @@ use console::style;
 use crate::cli::ingest::track_file;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
-use crate::models::Category;
 use crate::reference::{
     expand_reference_scope, format_ref, parse_reference, ExpandedScope, Reference, ScopeLevel,
     TagFilter,
 };
+use crate::walk;
 
 pub fn run(cwd: &Path, raw_refs: &[String], _no_hash_check: bool) -> Result<()> {
     let ctx = discover(cwd)?;
@@ -106,17 +106,10 @@ fn list_target(
     glob_filter: Option<&glob::Pattern>,
 ) -> Result<bool> {
     let db = ProjectDb::open(&target.project_root.join(".mkrk"))?;
-    let patterns = category_patterns(&db, target.category_name.as_deref())?;
+    let patterns = walk::category_patterns(&db, target.category_name.as_deref())?;
     let project_name = target.project_name.as_deref();
 
-    let mut entries = Vec::new();
-    walk_collect(
-        &target.project_root,
-        &target.project_root,
-        &patterns,
-        &mut entries,
-    )?;
-    entries.sort();
+    let entries = walk::walk_and_collect(&target.project_root, &patterns)?;
 
     let mut found = false;
     let mut auto_ingested = 0usize;
@@ -180,61 +173,6 @@ pub(crate) fn matches_tags(
         }
     }
     Ok(true)
-}
-
-pub(crate) fn category_patterns(
-    db: &ProjectDb,
-    category_name: Option<&str>,
-) -> Result<Vec<glob::Pattern>> {
-    let Some(name) = category_name else {
-        return Ok(vec![glob::Pattern::new("**")?]);
-    };
-
-    if let Some(cat) = db.get_category_by_name(name)? {
-        let base = Category::name_from_pattern(&cat.pattern);
-        return Ok(vec![
-            glob::Pattern::new(&format!("{base}/*"))?,
-            glob::Pattern::new(&format!("{base}/**/*"))?,
-        ]);
-    }
-
-    // Subcategory path (e.g. evidence/emails) — treat as path prefix
-    Ok(vec![
-        glob::Pattern::new(&format!("{name}/*"))?,
-        glob::Pattern::new(&format!("{name}/**/*"))?,
-    ])
-}
-
-pub(crate) fn walk_collect(
-    root: &Path,
-    dir: &Path,
-    patterns: &[glob::Pattern],
-    entries: &mut Vec<String>,
-) -> Result<()> {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.into()),
-    };
-
-    for entry in read_dir {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-
-        let path = entry.path();
-        if path.is_dir() {
-            walk_collect(root, &path, patterns, entries)?;
-        } else if path.is_file() {
-            let rel_path = path.strip_prefix(root)?.to_string_lossy().to_string();
-            if patterns.iter().any(|p| p.matches(&rel_path)) {
-                entries.push(rel_path);
-            }
-        }
-    }
-    Ok(())
 }
 
 fn print_file(name: &str, path: &str, sha256: Option<&str>, was_tracked: bool) {

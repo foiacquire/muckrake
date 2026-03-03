@@ -10,7 +10,7 @@ const CROSS_DEVICE_ERROR: i32 = 17; // ERROR_NOT_SAME_DEVICE
 use crate::context::discover;
 use crate::integrity;
 use crate::models::{ProtectionLevel, TriggerEvent};
-use crate::reference::{format_ref, parse_reference, resolve_references};
+use crate::reference::{format_ref, resolve_file_ref};
 use crate::rules::RuleEvent;
 use crate::util::whoami;
 
@@ -18,17 +18,13 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
-    let parsed = parse_reference(reference)?;
-    let collection = resolve_references(&[parsed], &ctx)?;
-    let resolved = collection.expect_one(reference)?;
-    let file = resolved.file;
-    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let file_name = &file.name;
     let new_rel_path = format!("{category}/{file_name}");
 
     if project_db.match_category(&new_rel_path)?.is_none() {
-        bail!("no category matches '{category}' — use 'mkrk list' to see registered categories");
+        bail!("no category matches '{category}' -- use 'mkrk list' to see registered categories");
     }
 
     let old_path = project_root.join(&file.path);

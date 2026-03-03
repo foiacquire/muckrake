@@ -9,8 +9,8 @@ use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::integrity;
 use crate::models::{Category, Pipeline, Sign, TrackedFile, TriggerEvent};
-use crate::pipeline::state::derive_file_state;
-use crate::reference::{format_ref, parse_reference, resolve_references};
+use crate::pipeline::state::{derive_file_state, FileState};
+use crate::reference::{format_ref, parse_reference, resolve_file_ref, resolve_references};
 use crate::rules::RuleEvent;
 use crate::util::whoami;
 
@@ -24,17 +24,12 @@ pub fn run_sign(
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
-    let parsed = parse_reference(reference)?;
-    let collection = resolve_references(&[parsed], &ctx)?;
-    let resolved = collection.expect_one(reference)?;
-    let file = resolved.file;
-    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    let current_hash = rehash_file(project_root, &file)?;
+    let current_hash = file_hash(project_root, &file, true)?;
 
     let categories = project_db.list_categories()?;
-    let tags = project_db.get_tags(file_id)?;
-    let pipelines = project_db.get_pipelines_for_file(file_id, &file.path, &categories, &tags)?;
+    let pipelines = resolve_file_pipelines(project_db, file_id, &file, &categories, None)?;
 
     let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &file.path)?;
     let pipeline_id = pipeline.id.unwrap();
@@ -48,7 +43,8 @@ pub fn run_sign(
         None
     };
 
-    let old_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+    let old_state =
+        pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
 
     let sign = build_sign(pipeline_id, file_id, &current_hash, sign_name, signature);
     project_db.insert_sign(&sign)?;
@@ -60,7 +56,8 @@ pub fn run_sign(
         pipeline.name
     );
 
-    let new_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+    let new_state =
+        pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
 
     fire_pipeline_rule(&ctx, &file, &pipeline.name, Some(sign_name), &new_state);
     if old_state != new_state {
@@ -79,15 +76,10 @@ pub fn run_unsign(
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
-    let parsed = parse_reference(reference)?;
-    let collection = resolve_references(&[parsed], &ctx)?;
-    let resolved = collection.expect_one(reference)?;
-    let file = resolved.file;
-    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let categories = project_db.list_categories()?;
-    let tags = project_db.get_tags(file_id)?;
-    let pipelines = project_db.get_pipelines_for_file(file_id, &file.path, &categories, &tags)?;
+    let pipelines = resolve_file_pipelines(project_db, file_id, &file, &categories, None)?;
 
     let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &file.path)?;
     let pipeline_id = pipeline.id.unwrap();
@@ -103,8 +95,9 @@ pub fn run_unsign(
             )
         })?;
 
-    let current_hash = current_file_hash(project_root, &file);
-    let old_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+    let current_hash = file_hash(project_root, &file, false)?;
+    let old_state =
+        pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
 
     let now = Utc::now().to_rfc3339();
     project_db.revoke_sign(sign.id.unwrap(), &now)?;
@@ -116,7 +109,8 @@ pub fn run_unsign(
         pipeline.name
     );
 
-    let new_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
+    let new_state =
+        pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
     if old_state != new_state {
         fire_pipeline_rule(&ctx, &file, &pipeline.name, None, &new_state);
     }
@@ -172,7 +166,7 @@ pub fn run_state(cwd: &Path, reference: Option<&str>, pipeline_name: Option<&str
         }
         any_state = true;
 
-        let hash = current_file_hash(project_root, &entry.file);
+        let hash = file_hash(project_root, &entry.file, false)?;
         let ref_str = format_ref(&entry.file.path, entry.project_name.as_deref(), project_db);
 
         println!("{}", style(&ref_str).bold());
@@ -247,13 +241,14 @@ fn resolve_file_pipelines(
     Ok(pipelines)
 }
 
-fn current_file_hash(project_root: &Path, file: &TrackedFile) -> String {
-    let current_hash = file.sha256.clone().unwrap_or_default();
+fn file_hash(project_root: &Path, file: &TrackedFile, require_exists: bool) -> Result<String> {
     let file_path = project_root.join(&file.path);
     if file_path.exists() {
-        integrity::hash_file(&file_path).unwrap_or(current_hash)
+        integrity::hash_file(&file_path)
+    } else if require_exists {
+        bail!("file not found: {}", file.path)
     } else {
-        current_hash
+        Ok(file.sha256.clone().unwrap_or_default())
     }
 }
 
@@ -288,13 +283,7 @@ fn print_pipeline_state(
     pipeline: &Pipeline,
     hash: &str,
 ) -> Result<()> {
-    let signs = project_db.get_signs_for_file(file_id)?;
-    let pipeline_signs: Vec<_> = signs
-        .into_iter()
-        .filter(|s| s.pipeline_id == pipeline.id.unwrap())
-        .collect();
-
-    let state = derive_file_state(pipeline, &pipeline_signs, hash);
+    let state = pipeline_file_state(project_db, file_id, pipeline, hash)?;
 
     print!(
         "  {}: {}",
@@ -351,27 +340,18 @@ fn validate_sign_name_for_pipeline(sign_name: &str, pipeline: &Pipeline) -> Resu
     );
 }
 
-fn rehash_file(project_root: &Path, file: &TrackedFile) -> Result<String> {
-    let file_path = project_root.join(&file.path);
-    if !file_path.exists() {
-        bail!("file not found: {}", file.path);
-    }
-    integrity::hash_file(&file_path)
-}
-
-fn derive_pipeline_state(
+fn pipeline_file_state(
     project_db: &ProjectDb,
     file_id: i64,
     pipeline: &Pipeline,
     current_hash: &str,
-) -> Result<String> {
+) -> Result<FileState> {
     let signs = project_db.get_signs_for_file(file_id)?;
     let pipeline_signs: Vec<_> = signs
-        .iter()
+        .into_iter()
         .filter(|s| s.pipeline_id == pipeline.id.unwrap())
-        .cloned()
         .collect();
-    Ok(derive_file_state(pipeline, &pipeline_signs, current_hash).current_state)
+    Ok(derive_file_state(pipeline, &pipeline_signs, current_hash))
 }
 
 fn fire_pipeline_rule(

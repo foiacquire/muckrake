@@ -16,3 +16,4 @@ pub mod reference;
 pub mod rules;
 pub mod tools;
 pub mod util;
+pub mod walk;

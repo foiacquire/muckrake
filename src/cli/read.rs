@@ -5,7 +5,7 @@ use anyhow::Result;
 use console::style;
 
 use crate::cli::ingest::track_file;
-use crate::cli::list::{category_patterns, matches_tags, walk_collect};
+use crate::cli::list::matches_tags;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::reference::{
@@ -13,6 +13,7 @@ use crate::reference::{
     TagFilter,
 };
 use crate::util::format_size;
+use crate::walk;
 
 struct ResolvedEntry {
     abs_path: PathBuf,
@@ -132,16 +133,8 @@ fn collect_target(
     glob_filter: Option<&glob::Pattern>,
 ) -> Result<Vec<ResolvedEntry>> {
     let db = ProjectDb::open(&target.project_root.join(".mkrk"))?;
-    let patterns = category_patterns(&db, target.category_name.as_deref())?;
-
-    let mut paths = Vec::new();
-    walk_collect(
-        &target.project_root,
-        &target.project_root,
-        &patterns,
-        &mut paths,
-    )?;
-    paths.sort();
+    let patterns = walk::category_patterns(&db, target.category_name.as_deref())?;
+    let paths = walk::walk_and_collect(&target.project_root, &patterns)?;
 
     let mut entries = Vec::new();
     for rel_path in &paths {

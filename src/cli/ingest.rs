@@ -10,14 +10,55 @@ use crate::models::{ProtectionLevel, TrackedFile, TriggerEvent};
 use crate::reference::format_ref;
 use crate::rules::RuleEvent;
 use crate::util::whoami;
+use crate::walk;
 
 pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
-    let patterns = resolve_patterns(project_db, scope)?;
 
-    let mut count = 0;
-    walk_dir(project_root, &ctx, &patterns, &mut count)?;
+    if let Some(name) = scope {
+        if project_db.get_category_by_name(name)?.is_none() {
+            anyhow::bail!("no category named '{name}'");
+        }
+    }
+
+    let patterns = walk::category_patterns(project_db, scope)?;
+    let entries = walk::walk_and_collect(project_root, &patterns)?;
+
+    let mut count = 0usize;
+    for rel_path in &entries {
+        if project_db.get_file_by_path(rel_path)?.is_some() {
+            continue;
+        }
+
+        let abs_path = project_root.join(rel_path);
+        let file_id = track_file(project_db, &abs_path, rel_path)?;
+        count += 1;
+
+        if let Ok(Some(file)) = project_db.get_file_by_path(rel_path) {
+            let protection = project_db
+                .resolve_protection(rel_path)
+                .unwrap_or(ProtectionLevel::Editable);
+            let ref_str = format_ref(rel_path, ctx.project_name(), project_db);
+            eprintln!(
+                "  {ref_str} [{}]",
+                protection_label(project_root, &abs_path, protection, file.immutable)
+            );
+
+            let event = RuleEvent {
+                event: TriggerEvent::Ingest,
+                file: Some(&file),
+                file_id: Some(file_id),
+                rel_path: Some(rel_path),
+                tag_name: None,
+                target_category: None,
+                pipeline_name: None,
+                sign_name: None,
+                new_state: None,
+            };
+            crate::rules::fire_rules(&ctx, &event);
+        }
+    }
 
     if count == 0 {
         eprintln!("No new files to ingest");
@@ -38,86 +79,6 @@ pub fn workspace_from_ctx(ctx: &Context) -> (Option<&Path>, Option<&WorkspaceDb>
     } else {
         (None, None)
     }
-}
-
-fn resolve_patterns(db: &crate::db::ProjectDb, scope: Option<&str>) -> Result<Vec<glob::Pattern>> {
-    let Some(name) = scope else {
-        return Ok(vec![glob::Pattern::new("**")?]);
-    };
-
-    let cat = db
-        .get_category_by_name(name)?
-        .ok_or_else(|| anyhow::anyhow!("no category named '{name}'"))?;
-
-    let base = crate::models::Category::name_from_pattern(&cat.pattern);
-    Ok(vec![
-        glob::Pattern::new(&format!("{base}/*"))?,
-        glob::Pattern::new(&format!("{base}/**/*"))?,
-    ])
-}
-
-fn walk_dir(
-    dir: &Path,
-    ctx: &Context,
-    patterns: &[glob::Pattern],
-    count: &mut usize,
-) -> Result<()> {
-    let (project_root, project_db) = ctx.require_project()?;
-
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        if name.starts_with('.') {
-            continue;
-        }
-
-        if path.is_dir() {
-            walk_dir(&path, ctx, patterns, count)?;
-        } else if path.is_file() {
-            let rel_path = path
-                .strip_prefix(project_root)?
-                .to_string_lossy()
-                .to_string();
-
-            if !patterns.iter().any(|p| p.matches(&rel_path)) {
-                continue;
-            }
-
-            if project_db.get_file_by_path(&rel_path)?.is_some() {
-                continue;
-            }
-
-            let file_id = track_file(project_db, &path, &rel_path)?;
-            *count += 1;
-
-            if let Ok(Some(file)) = project_db.get_file_by_path(&rel_path) {
-                let protection = project_db
-                    .resolve_protection(&rel_path)
-                    .unwrap_or(ProtectionLevel::Editable);
-                let ref_str = format_ref(&rel_path, ctx.project_name(), project_db);
-                eprintln!(
-                    "  {ref_str} [{}]",
-                    protection_label(project_root, &path, protection, file.immutable)
-                );
-
-                let event = RuleEvent {
-                    event: TriggerEvent::Ingest,
-                    file: Some(&file),
-                    file_id: Some(file_id),
-                    rel_path: Some(&rel_path),
-                    tag_name: None,
-                    target_category: None,
-                    pipeline_name: None,
-                    sign_name: None,
-                    new_state: None,
-                };
-                crate::rules::fire_rules(ctx, &event);
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Track a file that already exists on disk inside the project.
