@@ -7,7 +7,7 @@ use console::style;
 use crate::context::{discover, Context};
 use crate::integrity;
 use crate::models::{TrackedFile, TriggerEvent};
-use crate::reference::{parse_reference, resolve_references};
+use crate::reference::{format_ref, parse_reference, resolve_references};
 use crate::rules::RuleEvent;
 
 fn fire_tag_event(
@@ -43,6 +43,7 @@ fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(TrackedFile, i64)
 pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
+    let project_name = ctx.project_name();
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let abs_path = project_root.join(&file.path);
@@ -52,10 +53,8 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
 
     let short_hash = &hash[..10];
-    eprintln!(
-        "Tagged '{}' with '{tag}' (sha256: {short_hash}...)",
-        file.name
-    );
+    let ref_str = format_ref(&file.path, project_name, project_db);
+    eprintln!("Tagged '{ref_str}' with '{tag}' (sha256: {short_hash}...)");
 
     fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Tag);
 
@@ -65,13 +64,15 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
 pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_project_root, project_db) = ctx.require_project()?;
+    let project_name = ctx.project_name();
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let removed = project_db.remove_tag(file_id, tag)?;
+    let ref_str = format_ref(&file.path, project_name, project_db);
     if removed == 0 {
-        bail!("tag '{tag}' not found on '{}'", file.name);
+        bail!("tag '{tag}' not found on '{ref_str}'");
     }
-    eprintln!("Removed tag '{tag}' from '{}'", file.name);
+    eprintln!("Removed tag '{tag}' from '{ref_str}'");
 
     fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Untag);
 
@@ -81,6 +82,7 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
 pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
+    let project_name = ctx.project_name();
 
     if no_hash_check {
         eprintln!(
@@ -92,10 +94,11 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
     if let Some(r) = reference {
         let (file, file_id) = resolve_file_ref(r, &ctx)?;
         let tags = project_db.get_tags(file_id)?;
+        let ref_str = format_ref(&file.path, project_name, project_db);
         if tags.is_empty() {
-            eprintln!("No tags on '{}'", file.name);
+            eprintln!("No tags on '{ref_str}'");
         } else {
-            println!("Tags on '{}':", file.name);
+            println!("Tags on '{ref_str}':");
             for tag in &tags {
                 let status = if no_hash_check {
                     String::new()

@@ -10,7 +10,7 @@ use crate::db::ProjectDb;
 use crate::integrity;
 use crate::models::{Category, Pipeline, Sign, TrackedFile, TriggerEvent};
 use crate::pipeline::state::derive_file_state;
-use crate::reference::{parse_reference, resolve_references};
+use crate::reference::{format_ref, parse_reference, resolve_references};
 use crate::rules::RuleEvent;
 use crate::util::whoami;
 
@@ -54,9 +54,10 @@ pub fn run_sign(
     project_db.insert_sign(&sign)?;
     audit_sign(project_db, file_id, &sign.signer, &pipeline.name, sign_name)?;
 
+    let ref_str = format_ref(&file.path, ctx.project_name(), project_db);
     eprintln!(
-        "Signed '{}' as '{}' in pipeline '{}'",
-        file.path, sign_name, pipeline.name
+        "Signed '{ref_str}' as '{sign_name}' in pipeline '{}'",
+        pipeline.name
     );
 
     let new_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
@@ -109,9 +110,10 @@ pub fn run_unsign(
     project_db.revoke_sign(sign.id.unwrap(), &now)?;
     audit_sign(project_db, file_id, &whoami(), &pipeline.name, sign_name)?;
 
+    let ref_str = format_ref(&file.path, ctx.project_name(), project_db);
     eprintln!(
-        "Revoked sign '{}' for '{}' in pipeline '{}'",
-        sign_name, file.path, pipeline.name
+        "Revoked sign '{sign_name}' for '{ref_str}' in pipeline '{}'",
+        pipeline.name
     );
 
     let new_state = derive_pipeline_state(project_db, file_id, pipeline, &current_hash)?;
@@ -125,19 +127,20 @@ pub fn run_unsign(
 pub fn run_signs(cwd: &Path, reference: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
-    let files = resolve_files_with_ids(reference, &ctx, project_db)?;
+    let entries = resolve_files_with_ids(reference, &ctx, project_db)?;
 
     let mut any_signs = false;
-    for (file, file_id) in &files {
-        let signs = project_db.get_signs_for_file(*file_id)?;
+    for entry in &entries {
+        let signs = project_db.get_signs_for_file(entry.file_id)?;
         if signs.is_empty() {
             continue;
         }
         any_signs = true;
 
-        println!("{}", style(&file.path).bold());
+        let ref_str = format_ref(&entry.file.path, entry.project_name.as_deref(), project_db);
+        println!("{}", style(&ref_str).bold());
         for sign in &signs {
-            print_sign_detail(project_db, sign, file);
+            print_sign_detail(project_db, sign, &entry.file);
         }
     }
 
@@ -151,24 +154,30 @@ pub fn run_signs(cwd: &Path, reference: Option<&str>) -> Result<()> {
 pub fn run_state(cwd: &Path, reference: Option<&str>, pipeline_name: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
-    let files = resolve_files_with_ids(reference, &ctx, project_db)?;
+    let entries = resolve_files_with_ids(reference, &ctx, project_db)?;
     let categories = project_db.list_categories()?;
     let mut any_state = false;
 
-    for (file, file_id) in &files {
-        let pipelines =
-            resolve_file_pipelines(project_db, *file_id, file, &categories, pipeline_name)?;
+    for entry in &entries {
+        let pipelines = resolve_file_pipelines(
+            project_db,
+            entry.file_id,
+            &entry.file,
+            &categories,
+            pipeline_name,
+        )?;
 
         if pipelines.is_empty() {
             continue;
         }
         any_state = true;
 
-        let hash = current_file_hash(project_root, file);
+        let hash = current_file_hash(project_root, &entry.file);
+        let ref_str = format_ref(&entry.file.path, entry.project_name.as_deref(), project_db);
 
-        println!("{}", style(&file.path).bold());
+        println!("{}", style(&ref_str).bold());
         for pipeline in &pipelines {
-            print_pipeline_state(project_db, *file_id, pipeline, &hash)?;
+            print_pipeline_state(project_db, entry.file_id, pipeline, &hash)?;
         }
     }
 
@@ -179,11 +188,17 @@ pub fn run_state(cwd: &Path, reference: Option<&str>, pipeline_name: Option<&str
     Ok(())
 }
 
+struct ResolvedFileEntry {
+    file: TrackedFile,
+    file_id: i64,
+    project_name: Option<String>,
+}
+
 fn resolve_files_with_ids(
     reference: Option<&str>,
     ctx: &Context,
     project_db: &ProjectDb,
-) -> Result<Vec<(TrackedFile, i64)>> {
+) -> Result<Vec<ResolvedFileEntry>> {
     if let Some(r) = reference {
         let parsed = parse_reference(r)?;
         let collection = resolve_references(&[parsed], ctx)?;
@@ -191,17 +206,26 @@ fn resolve_files_with_ids(
             .files
             .into_iter()
             .filter_map(|rf| {
-                let id = rf.file.id?;
-                Some((rf.file, id))
+                let file_id = rf.file.id?;
+                Some(ResolvedFileEntry {
+                    file: rf.file,
+                    file_id,
+                    project_name: rf.project_name,
+                })
             })
             .collect())
     } else {
+        let name = ctx.project_name().map(String::from);
         let all = project_db.list_files(None)?;
         Ok(all
             .into_iter()
             .filter_map(|f| {
-                let id = f.id?;
-                Some((f, id))
+                let file_id = f.id?;
+                Some(ResolvedFileEntry {
+                    file: f,
+                    file_id,
+                    project_name: name.clone(),
+                })
             })
             .collect())
     }

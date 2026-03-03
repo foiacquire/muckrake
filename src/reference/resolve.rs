@@ -465,6 +465,7 @@ mod tests {
         Context::Project {
             project_root: dir.to_path_buf(),
             project_db: ProjectDb::open(&dir.join(".mkrk")).unwrap(),
+            project_name: None,
             workspace: None,
         }
     }
@@ -508,6 +509,7 @@ mod tests {
         Context::Project {
             project_root: proj_dir.to_path_buf(),
             project_db: ProjectDb::open(&proj_dir.join(".mkrk")).unwrap(),
+            project_name: None,
             workspace: Some(WorkspaceContext {
                 workspace_root: ws.ws_dir.path().to_path_buf(),
                 workspace_db: WorkspaceDb::open(&ws.ws_dir.path().join(".mksp")).unwrap(),

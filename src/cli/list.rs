@@ -8,7 +8,8 @@ use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::models::Category;
 use crate::reference::{
-    expand_reference_scope, parse_reference, ExpandedScope, Reference, ScopeLevel, TagFilter,
+    expand_reference_scope, format_ref, parse_reference, ExpandedScope, Reference, ScopeLevel,
+    TagFilter,
 };
 
 pub fn run(cwd: &Path, raw_refs: &[String], _no_hash_check: bool) -> Result<()> {
@@ -106,10 +107,7 @@ fn list_target(
 ) -> Result<bool> {
     let db = ProjectDb::open(&target.project_root.join(".mkrk"))?;
     let patterns = category_patterns(&db, target.category_name.as_deref())?;
-
-    if let Some(ref name) = target.project_name {
-        println!("{}:", style(name).bold());
-    }
+    let project_name = target.project_name.as_deref();
 
     let mut entries = Vec::new();
     walk_collect(
@@ -149,7 +147,8 @@ fn list_target(
 
         let file = db.get_file_by_path(rel_path)?;
         let sha256 = file.as_ref().and_then(|f| f.sha256.as_deref());
-        print_file(&file_name, rel_path, sha256, was_tracked);
+        let ref_str = format_ref(rel_path, project_name, &db);
+        print_file(&file_name, &ref_str, sha256, was_tracked);
         found = true;
     }
 

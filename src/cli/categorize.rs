@@ -10,7 +10,7 @@ const CROSS_DEVICE_ERROR: i32 = 17; // ERROR_NOT_SAME_DEVICE
 use crate::context::discover;
 use crate::integrity;
 use crate::models::{ProtectionLevel, TriggerEvent};
-use crate::reference::{parse_reference, resolve_references};
+use crate::reference::{format_ref, parse_reference, resolve_references};
 use crate::rules::RuleEvent;
 use crate::util::whoami;
 
@@ -57,7 +57,10 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
         Some(&detail.to_string()),
     )?;
 
-    eprintln!("Moved: {} -> {}", file.path, new_rel_path);
+    let project_name = ctx.project_name();
+    let old_ref = format_ref(&file.path, project_name, project_db);
+    let new_ref = format_ref(&new_rel_path, project_name, project_db);
+    eprintln!("Moved: {old_ref} -> {new_ref}");
     eprintln!("  Protection: {new_protection}");
 
     let event = RuleEvent {

@@ -7,14 +7,14 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn mkrk(dir: &Path) -> Command {
-    let mut cmd: Command = cargo_bin_cmd!("mkrk").into();
+    let mut cmd = cargo_bin_cmd!("mkrk");
     cmd.current_dir(dir);
     cmd.env("NO_COLOR", "1");
     cmd
 }
 
 /// Create a project directory inside the tempdir with a valid name.
-/// Returns (tempdir_guard, project_path). The tempdir guard must be kept alive.
+/// Returns `(tempdir_guard, project_path)`. The tempdir guard must be kept alive.
 fn project_dir() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("testproject");
@@ -44,7 +44,7 @@ fn create_test_file(dir: &Path, name: &str, content: &str) -> String {
 
 #[test]
 fn binary_runs() {
-    let mut cmd: Command = cargo_bin_cmd!("mkrk").into();
+    let mut cmd = cargo_bin_cmd!("mkrk");
     cmd.arg("--version");
     cmd.assert()
         .success()
@@ -215,9 +215,14 @@ fn tag_and_list_tags() {
     mkrk(&project)
         .args(["tag", &rel, "important"])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains(format!("Tagged '{rel}'")));
 
-    assert_file_tags(&project, &rel, predicate::str::contains("important"));
+    assert_file_tags(
+        &project,
+        &rel,
+        predicate::str::contains("important").and(predicate::str::contains(&rel)),
+    );
 }
 
 #[test]
@@ -234,7 +239,50 @@ fn untag_removes_tag() {
     mkrk(&project)
         .args(["untag", &rel, "removeme"])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "Removed tag 'removeme' from '{rel}'"
+        )));
 
     assert_file_tags(&project, &rel, predicate::str::contains("removeme").not());
+}
+
+// --- Workspace context ---
+
+#[test]
+fn workspace_list_shows_project_refs() {
+    let tmp = TempDir::new().unwrap();
+    let ws_root = tmp.path().join("workspace");
+    fs::create_dir(&ws_root).unwrap();
+
+    mkrk(&ws_root)
+        .args(["init", "--workspace", "projects/"])
+        .assert()
+        .success();
+
+    mkrk(&ws_root)
+        .args(["init", "alpha", "--category", "evidence/**:editable"])
+        .assert()
+        .success();
+
+    let evidence_dir = ws_root.join("projects/alpha/evidence");
+    fs::create_dir_all(&evidence_dir).unwrap();
+    fs::write(evidence_dir.join("report.txt"), "workspace test").unwrap();
+
+    let project_dir = ws_root.join("projects/alpha");
+    mkrk(&project_dir).arg("ingest").assert().success();
+
+    // Scoped reference from workspace root uses format_ref
+    mkrk(&ws_root)
+        .args(["list", ":alpha"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(":alpha.evidence/report.txt"));
+
+    // Workspace-dispatched verify shows project-prefixed references
+    mkrk(&ws_root)
+        .arg("verify")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(":alpha.evidence/report.txt"));
 }

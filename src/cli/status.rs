@@ -13,13 +13,16 @@ pub fn run(cwd: &Path) -> Result<()> {
         Context::Project {
             project_root,
             project_db,
+            project_name,
             workspace,
         } => {
-            let name = project_root.file_name().map_or_else(
-                || "unknown".to_string(),
-                |n| n.to_string_lossy().to_string(),
-            );
-            eprintln!("{} Project: {}", style("●").green(), style(&name).bold());
+            let name = project_name.as_deref().unwrap_or_else(|| {
+                project_root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+            });
+            eprintln!("{} Project: {}", style("●").green(), style(name).bold());
             eprintln!("  Path: {}", project_root.display());
             print_project_stats(&project_db)?;
 

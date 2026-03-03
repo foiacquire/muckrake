@@ -7,6 +7,7 @@ use crate::context::{discover, Context};
 use crate::db::WorkspaceDb;
 use crate::integrity;
 use crate::models::{ProtectionLevel, TrackedFile, TriggerEvent};
+use crate::reference::format_ref;
 use crate::rules::RuleEvent;
 use crate::util::whoami;
 
@@ -95,9 +96,9 @@ fn walk_dir(
                 let protection = project_db
                     .resolve_protection(&rel_path)
                     .unwrap_or(ProtectionLevel::Editable);
+                let ref_str = format_ref(&rel_path, ctx.project_name(), project_db);
                 eprintln!(
-                    "  {} [{}]",
-                    rel_path,
+                    "  {ref_str} [{}]",
                     protection_label(project_root, &path, protection, file.immutable)
                 );
 

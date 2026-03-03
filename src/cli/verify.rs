@@ -3,22 +3,21 @@ use std::path::Path;
 use anyhow::{bail, Result};
 use console::style;
 
-use crate::context::{discover, Context};
+use crate::context::discover;
 use crate::db::ProjectDb;
 use crate::integrity::{self, VerifyResult};
 use crate::models::{ProtectionLevel, TrackedFile};
-use crate::reference::{parse_reference, resolve_references};
+use crate::reference::{format_ref, parse_reference, resolve_references};
 use crate::util::whoami;
 
 pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
-    let Context::Project {
-        project_root,
-        project_db,
-        ..
-    } = &ctx
-    else {
-        bail!("must be inside a project to verify files");
+    let (project_root, project_db) = ctx.require_project()?;
+
+    let vctx = VerifyCtx {
+        root: project_root,
+        db: project_db,
+        name: ctx.project_name(),
     };
 
     let files = if let Some(r) = reference {
@@ -35,7 +34,7 @@ pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
         project_db.list_files(None)?
     };
 
-    let counts = verify_files(project_root, project_db, &files)?;
+    let counts = verify_files(&vctx, &files)?;
 
     eprintln!();
     if counts.fixed > 0 {
@@ -60,6 +59,18 @@ pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+struct VerifyCtx<'a> {
+    root: &'a Path,
+    db: &'a ProjectDb,
+    name: Option<&'a str>,
+}
+
+impl VerifyCtx<'_> {
+    fn format_ref(&self, path: &str) -> String {
+        format_ref(path, self.name, self.db)
+    }
+}
+
 struct VerifyCounts {
     ok: u32,
     modified: u32,
@@ -68,11 +79,7 @@ struct VerifyCounts {
     fixed: u32,
 }
 
-fn verify_files(
-    project_root: &Path,
-    project_db: &ProjectDb,
-    files: &[TrackedFile],
-) -> Result<VerifyCounts> {
+fn verify_files(vctx: &VerifyCtx<'_>, files: &[TrackedFile]) -> Result<VerifyCounts> {
     let mut counts = VerifyCounts {
         ok: 0,
         modified: 0,
@@ -87,50 +94,51 @@ fn verify_files(
             continue;
         };
 
-        let abs_path = project_root.join(&file.path);
+        let abs_path = vctx.root.join(&file.path);
         let result = integrity::verify_file(&abs_path, expected_hash)?;
 
-        print_verify_result(&result, &abs_path, &file.path, file.fingerprint.as_deref());
+        print_verify_result(vctx, &result, &abs_path, file);
         match result {
             VerifyResult::Ok => {
                 counts.ok += 1;
-                counts.fixed += backfill_fingerprint(file, &abs_path, project_db)?;
+                counts.fixed += backfill_fingerprint(vctx, file, &abs_path)?;
             }
             VerifyResult::Modified { .. } => counts.modified += 1,
             VerifyResult::Missing => counts.missing += 1,
         }
 
-        counts.fixed += check_immutable_flag(file, &abs_path, project_db)?;
+        counts.fixed += check_immutable_flag(vctx, file, &abs_path)?;
     }
 
     Ok(counts)
 }
 
 fn print_verify_result(
+    vctx: &VerifyCtx<'_>,
     result: &VerifyResult,
     abs_path: &Path,
-    rel_path: &str,
-    fingerprint: Option<&str>,
+    file: &TrackedFile,
 ) {
+    let ref_str = vctx.format_ref(&file.path);
     match result {
         VerifyResult::Ok => {
-            eprintln!("  {} {rel_path}", style("✓").green());
+            eprintln!("  {} {ref_str}", style("✓").green());
         }
         VerifyResult::Modified { expected, actual } => {
             eprintln!(
                 "  {} {} MODIFIED",
                 style("✗").red().bold(),
-                style(rel_path).red()
+                style(&ref_str).red()
             );
             eprintln!("    expected: {}", style(expected).dim());
             eprintln!("    actual:   {}", style(actual).dim());
-            print_chunk_diff(abs_path, fingerprint);
+            print_chunk_diff(abs_path, file.fingerprint.as_deref());
         }
         VerifyResult::Missing => {
             eprintln!(
                 "  {} {} MISSING",
                 style("?").yellow(),
-                style(rel_path).yellow()
+                style(&ref_str).yellow()
             );
         }
     }
@@ -154,11 +162,7 @@ fn print_chunk_diff(abs_path: &Path, fingerprint: Option<&str>) {
     }
 }
 
-fn backfill_fingerprint(
-    file: &TrackedFile,
-    abs_path: &Path,
-    project_db: &ProjectDb,
-) -> Result<u32> {
+fn backfill_fingerprint(vctx: &VerifyCtx<'_>, file: &TrackedFile, abs_path: &Path) -> Result<u32> {
     if file.fingerprint.is_some() {
         return Ok(0);
     }
@@ -167,70 +171,60 @@ fn backfill_fingerprint(
         return Ok(0);
     }
     let fp = integrity::fingerprint_file(abs_path)?;
-    project_db.update_file_fingerprint(file_id, &fp.to_json())?;
+    vctx.db.update_file_fingerprint(file_id, &fp.to_json())?;
+    let ref_str = vctx.format_ref(&file.path);
     eprintln!(
-        "  {} {} stored fingerprint ({})",
-        style("+").cyan(),
-        file.path,
-        fp
+        "  {} {ref_str} stored fingerprint ({fp})",
+        style("+").cyan()
     );
     Ok(1)
 }
 
-fn check_immutable_flag(
-    file: &TrackedFile,
-    file_path: &Path,
-    project_db: &ProjectDb,
-) -> Result<u32> {
-    let expected = project_db.resolve_protection(&file.path)?;
+fn check_immutable_flag(vctx: &VerifyCtx<'_>, file: &TrackedFile, file_path: &Path) -> Result<u32> {
+    let expected = vctx.db.resolve_protection(&file.path)?;
     let file_id = file.id.unwrap_or(0);
 
     if expected == ProtectionLevel::Immutable {
-        ensure_immutable(file, file_path, file_id, project_db)
+        ensure_immutable(vctx, file, file_path, file_id)
     } else if file.immutable {
-        clear_unexpected_immutable(file, file_path, file_id, expected, project_db)
+        clear_unexpected_immutable(vctx, file, file_path, file_id, expected)
     } else {
         Ok(0)
     }
 }
 
 fn ensure_immutable(
+    vctx: &VerifyCtx<'_>,
     file: &TrackedFile,
     file_path: &Path,
     file_id: i64,
-    project_db: &ProjectDb,
 ) -> Result<u32> {
     if !file_path.exists() {
         return Ok(0);
     }
 
+    let ref_str = vctx.format_ref(&file.path);
     if !integrity::is_immutable(file_path)? {
         match integrity::set_immutable(file_path) {
             Ok(()) => {
-                eprintln!(
-                    "  {} {} restored immutable flag",
-                    style("+").cyan(),
-                    file.path
-                );
+                eprintln!("  {} {ref_str} restored immutable flag", style("+").cyan());
                 if !file.immutable {
-                    project_db.update_file_immutable(file_id, true)?;
+                    vctx.db.update_file_immutable(file_id, true)?;
                 }
                 return Ok(1);
             }
             Err(e) => {
                 eprintln!(
-                    "  {} {} failed to restore immutable flag: {e}",
-                    style("!").yellow(),
-                    file.path
+                    "  {} {ref_str} failed to restore immutable flag: {e}",
+                    style("!").yellow()
                 );
             }
         }
     } else if !file.immutable {
-        project_db.update_file_immutable(file_id, true)?;
+        vctx.db.update_file_immutable(file_id, true)?;
         eprintln!(
-            "  {} {} synced immutable flag to db",
-            style("+").cyan(),
-            file.path
+            "  {} {ref_str} synced immutable flag to db",
+            style("+").cyan()
         );
         return Ok(1);
     }
@@ -239,27 +233,26 @@ fn ensure_immutable(
 }
 
 fn clear_unexpected_immutable(
+    vctx: &VerifyCtx<'_>,
     file: &TrackedFile,
     file_path: &Path,
     file_id: i64,
     expected: ProtectionLevel,
-    project_db: &ProjectDb,
 ) -> Result<u32> {
+    let ref_str = vctx.format_ref(&file.path);
     if file_path.exists() {
         if let Err(e) = integrity::clear_immutable(file_path) {
             eprintln!(
-                "  {} {} failed to clear immutable flag: {e}",
-                style("!").yellow(),
-                file.path
+                "  {} {ref_str} failed to clear immutable flag: {e}",
+                style("!").yellow()
             );
             return Ok(0);
         }
     }
-    project_db.update_file_immutable(file_id, false)?;
+    vctx.db.update_file_immutable(file_id, false)?;
     eprintln!(
-        "  {} {} cleared immutable flag (policy: {expected})",
-        style("+").cyan(),
-        file.path
+        "  {} {ref_str} cleared immutable flag (policy: {expected})",
+        style("+").cyan()
     );
     Ok(1)
 }

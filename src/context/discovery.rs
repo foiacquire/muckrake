@@ -8,6 +8,7 @@ pub enum Context {
     Project {
         project_root: PathBuf,
         project_db: ProjectDb,
+        project_name: Option<String>,
         workspace: Option<WorkspaceContext>,
     },
     Workspace {
@@ -23,6 +24,13 @@ pub struct WorkspaceContext {
 }
 
 impl Context {
+    pub fn project_name(&self) -> Option<&str> {
+        match self {
+            Self::Project { project_name, .. } => project_name.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn require_project(&self) -> Result<(&Path, &ProjectDb)> {
         match self {
             Self::Project {
@@ -42,6 +50,7 @@ impl Context {
                 project_root,
                 project_db,
                 workspace,
+                ..
             } => {
                 let ws = workspace.as_ref().map(|w| &w.workspace_db);
                 Ok((project_root, project_db, ws))
@@ -52,37 +61,17 @@ impl Context {
 }
 
 pub fn discover(cwd: &Path) -> Result<Context> {
-    let mut project_root: Option<PathBuf> = None;
-    let mut workspace_root: Option<PathBuf> = None;
-
-    let mut dir = cwd.to_path_buf();
-    loop {
-        let mkrk = dir.join(".mkrk");
-        let mksp = dir.join(".mksp");
-
-        if project_root.is_none() && mkrk.exists() {
-            project_root = Some(dir.clone());
-        }
-        if workspace_root.is_none() && mksp.exists() {
-            workspace_root = Some(dir.clone());
-        }
-
-        if project_root.is_some() && workspace_root.is_some() {
-            break;
-        }
-
-        if !dir.pop() {
-            break;
-        }
-    }
+    let (project_root, workspace_root) = find_markers(cwd);
 
     match (project_root, workspace_root) {
         (Some(proj), Some(ws)) => {
             let project_db = ProjectDb::open(&proj.join(".mkrk"))?;
             let workspace_db = WorkspaceDb::open(&ws.join(".mksp"))?;
+            let project_name = lookup_project_name(&proj, &ws, &workspace_db);
             Ok(Context::Project {
                 project_root: proj,
                 project_db,
+                project_name,
                 workspace: Some(WorkspaceContext {
                     workspace_root: ws,
                     workspace_db,
@@ -94,6 +83,7 @@ pub fn discover(cwd: &Path) -> Result<Context> {
             Ok(Context::Project {
                 project_root: proj,
                 project_db,
+                project_name: None,
                 workspace: None,
             })
         }
@@ -106,6 +96,41 @@ pub fn discover(cwd: &Path) -> Result<Context> {
         }
         (None, None) => Ok(Context::None),
     }
+}
+
+fn find_markers(cwd: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    let mut project_root: Option<PathBuf> = None;
+    let mut workspace_root: Option<PathBuf> = None;
+
+    let mut dir = cwd.to_path_buf();
+    loop {
+        if project_root.is_none() && dir.join(".mkrk").exists() {
+            project_root = Some(dir.clone());
+        }
+        if workspace_root.is_none() && dir.join(".mksp").exists() {
+            workspace_root = Some(dir.clone());
+        }
+        if (project_root.is_some() && workspace_root.is_some()) || !dir.pop() {
+            break;
+        }
+    }
+
+    (project_root, workspace_root)
+}
+
+fn lookup_project_name(
+    project_root: &Path,
+    workspace_root: &Path,
+    workspace_db: &WorkspaceDb,
+) -> Option<String> {
+    let rel = project_root.strip_prefix(workspace_root).ok()?;
+    let rel_str = rel.to_string_lossy();
+    workspace_db
+        .list_projects()
+        .ok()?
+        .into_iter()
+        .find(|p| p.path == rel_str.as_ref())
+        .map(|p| p.name)
 }
 
 pub fn find_workspace_root(cwd: &Path) -> Result<PathBuf> {

@@ -9,7 +9,8 @@ use crate::cli::list::{category_patterns, matches_tags, walk_collect};
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::reference::{
-    expand_reference_scope, parse_reference, ExpandedScope, Reference, ScopeLevel, TagFilter,
+    expand_reference_scope, format_ref, parse_reference, ExpandedScope, Reference, ScopeLevel,
+    TagFilter,
 };
 use crate::util::format_size;
 
@@ -161,10 +162,7 @@ fn collect_target(
             continue;
         }
 
-        let display_path = match &target.project_name {
-            Some(proj) => format!("{proj}:{rel_path}"),
-            None => rel_path.clone(),
-        };
+        let display_path = format_ref(rel_path, target.project_name.as_deref(), &db);
 
         entries.push(ResolvedEntry {
             abs_path,
