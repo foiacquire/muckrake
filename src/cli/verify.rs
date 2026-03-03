@@ -10,7 +10,7 @@ use crate::models::{ProtectionLevel, TrackedFile};
 use crate::reference::{format_ref, parse_reference, resolve_references};
 use crate::util::whoami;
 
-pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
+pub fn run(cwd: &Path, references: &[String]) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
@@ -20,18 +20,21 @@ pub fn run(cwd: &Path, reference: Option<&str>) -> Result<()> {
         name: ctx.project_name(),
     };
 
-    let files = if let Some(r) = reference {
-        let parsed = parse_reference(r)?;
-        let collection = resolve_references(&[parsed], &ctx)?;
+    let files = if references.is_empty() {
+        project_db.list_all_files()?
+    } else {
+        let parsed: Vec<_> = references
+            .iter()
+            .map(|r| parse_reference(r))
+            .collect::<Result<_>>()?;
+        let collection = resolve_references(&parsed, &ctx)?;
         if collection.files.is_empty() {
-            bail!("reference '{r}' matched no files");
+            bail!("references matched no files");
         }
         if collection.files.iter().any(|rf| rf.project_name.is_some()) {
             bail!("verify does not support cross-project references");
         }
         collection.files.into_iter().map(|rf| rf.file).collect()
-    } else {
-        project_db.list_files(None)?
     };
 
     let counts = verify_files(&vctx, &files)?;

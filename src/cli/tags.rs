@@ -70,7 +70,8 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+pub fn run_tags(cwd: &Path, references: &[String], no_hash_check: bool) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
     let project_name = ctx.project_name();
@@ -82,24 +83,7 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
         );
     }
 
-    if let Some(r) = reference {
-        let (file, file_id) = resolve_file_ref(r, &ctx)?;
-        let tags = project_db.get_tags(file_id)?;
-        let ref_str = format_ref(file.path.as_deref().unwrap_or(""), project_name, project_db);
-        if tags.is_empty() {
-            eprintln!("No tags on '{ref_str}'");
-        } else {
-            println!("Tags on '{ref_str}':");
-            for tag in &tags {
-                let status = if no_hash_check {
-                    String::new()
-                } else {
-                    format_tag_status(project_db, project_root, file_id, tag, file.path.as_deref().unwrap_or(""))
-                };
-                println!("  {}{status}", style(tag).cyan());
-            }
-        }
-    } else {
+    if references.is_empty() {
         let all_tags = project_db.list_all_tags()?;
         if all_tags.is_empty() {
             eprintln!("No tags in project");
@@ -110,6 +94,44 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
             }
             for (tag, file_ids) in &by_tag {
                 println!("  {} ({} files)", style(tag).cyan(), file_ids.len());
+            }
+        }
+    } else {
+        use crate::reference::parse_reference;
+        let parsed: Vec<_> = references
+            .iter()
+            .map(|r| parse_reference(r))
+            .collect::<Result<_>>()?;
+        let collection = crate::reference::resolve_references(&parsed, &ctx)?;
+        for rf in &collection.files {
+            let file_id = rf.file.id.unwrap_or(0);
+            if file_id == 0 {
+                continue;
+            }
+            let tags = project_db.get_tags(file_id)?;
+            let ref_str = format_ref(
+                rf.file.path.as_deref().unwrap_or(""),
+                project_name,
+                project_db,
+            );
+            if tags.is_empty() {
+                eprintln!("No tags on '{ref_str}'");
+            } else {
+                println!("Tags on '{ref_str}':");
+                for tag in &tags {
+                    let status = if no_hash_check {
+                        String::new()
+                    } else {
+                        format_tag_status(
+                            project_db,
+                            project_root,
+                            file_id,
+                            tag,
+                            rf.file.path.as_deref().unwrap_or(""),
+                        )
+                    };
+                    println!("  {}{status}", style(tag).cyan());
+                }
             }
         }
     }

@@ -120,10 +120,10 @@ pub fn run_unsign(
     Ok(())
 }
 
-pub fn run_signs(cwd: &Path, reference: Option<&str>) -> Result<()> {
+pub fn run_signs(cwd: &Path, references: &[String]) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
-    let entries = resolve_files_with_ids(reference, &ctx, project_db)?;
+    let entries = resolve_files_with_ids(references, &ctx, project_db)?;
 
     let mut any_signs = false;
     for entry in &entries {
@@ -147,10 +147,10 @@ pub fn run_signs(cwd: &Path, reference: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub fn run_state(cwd: &Path, reference: Option<&str>, pipeline_name: Option<&str>) -> Result<()> {
+pub fn run_state(cwd: &Path, references: &[String], pipeline_name: Option<&str>) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
-    let entries = resolve_files_with_ids(reference, &ctx, project_db)?;
+    let entries = resolve_files_with_ids(references, &ctx, project_db)?;
     let categories = project_db.list_categories()?;
     let mut any_state = false;
 
@@ -191,13 +191,30 @@ struct ResolvedFileEntry {
 }
 
 fn resolve_files_with_ids(
-    reference: Option<&str>,
+    references: &[String],
     ctx: &Context,
     project_db: &ProjectDb,
 ) -> Result<Vec<ResolvedFileEntry>> {
-    if let Some(r) = reference {
-        let parsed = parse_reference(r)?;
-        let collection = resolve_references(&[parsed], ctx)?;
+    if references.is_empty() {
+        let name = ctx.project_name().map(String::from);
+        let all = project_db.list_all_files()?;
+        Ok(all
+            .into_iter()
+            .filter_map(|f| {
+                let file_id = f.id?;
+                Some(ResolvedFileEntry {
+                    file: f,
+                    file_id,
+                    project_name: name.clone(),
+                })
+            })
+            .collect())
+    } else {
+        let parsed: Vec<_> = references
+            .iter()
+            .map(|r| parse_reference(r))
+            .collect::<Result<_>>()?;
+        let collection = resolve_references(&parsed, ctx)?;
         Ok(collection
             .files
             .into_iter()
@@ -207,20 +224,6 @@ fn resolve_files_with_ids(
                     file: rf.file,
                     file_id,
                     project_name: rf.project_name,
-                })
-            })
-            .collect())
-    } else {
-        let name = ctx.project_name().map(String::from);
-        let all = project_db.list_files(None)?;
-        Ok(all
-            .into_iter()
-            .filter_map(|f| {
-                let file_id = f.id?;
-                Some(ResolvedFileEntry {
-                    file: f,
-                    file_id,
-                    project_name: name.clone(),
                 })
             })
             .collect())

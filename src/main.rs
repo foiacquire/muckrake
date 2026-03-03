@@ -90,14 +90,15 @@ fn try_dispatch_workspace(command: &Commands, cwd: &Path) -> Result<Option<Resul
 
 /// Whether this command should automatically iterate over all workspace
 /// projects when run in workspace context without a scope prefix.
-const fn should_iterate_projects(command: &Commands) -> bool {
+#[allow(clippy::missing_const_for_fn)]
+fn should_iterate_projects(command: &Commands) -> bool {
     match command {
-        Commands::Ingest { .. }
-        | Commands::Category { .. }
-        | Commands::Verify { reference: None }
-        | Commands::Tags {
-            reference: None, ..
-        } => true,
+        Commands::Ingest { .. } | Commands::Category { .. } => true,
+        Commands::Verify { references, .. } | Commands::Tags { references, .. }
+            if references.is_empty() =>
+        {
+            true
+        }
         Commands::List { references, .. } => references.is_empty(),
         Commands::Rule { command } => matches!(command, RuleCommands::List),
         Commands::Pipeline { command } => matches!(
@@ -163,17 +164,13 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
         } => muckrake::cli::read::run(cwd, &references, path, query, raw),
         Commands::View { reference } => muckrake::cli::view::run_view(cwd, &reference),
         Commands::Edit { reference } => muckrake::cli::view::run_edit(cwd, &reference),
-        Commands::Verify { reference } => muckrake::cli::verify::run(cwd, reference.as_deref()),
-        Commands::Categorize {
-            reference,
-            category,
-        } => muckrake::cli::categorize::run(cwd, &reference, &category),
+        Commands::Verify { references } => muckrake::cli::verify::run(cwd, &references),
         Commands::Tag { reference, tag } => muckrake::cli::tags::run_tag(cwd, &reference, &tag),
         Commands::Untag { reference, tag } => muckrake::cli::tags::run_untag(cwd, &reference, &tag),
         Commands::Tags {
-            reference,
+            references,
             no_hash_check,
-        } => muckrake::cli::tags::run_tags(cwd, reference.as_deref(), no_hash_check),
+        } => muckrake::cli::tags::run_tags(cwd, &references, no_hash_check),
         Commands::Inbox { command } => match command {
             Some(InboxCommands::Assign {
                 file,
@@ -198,11 +195,11 @@ fn dispatch(command: Commands, cwd: &Path) -> Result<()> {
             sign_name,
             pipeline,
         } => muckrake::cli::sign::run_unsign(cwd, &reference, &sign_name, pipeline.as_deref()),
-        Commands::Signs { reference } => muckrake::cli::sign::run_signs(cwd, reference.as_deref()),
+        Commands::Signs { references } => muckrake::cli::sign::run_signs(cwd, &references),
         Commands::State {
-            reference,
+            references,
             pipeline,
-        } => muckrake::cli::sign::run_state(cwd, reference.as_deref(), pipeline.as_deref()),
+        } => muckrake::cli::sign::run_state(cwd, &references, pipeline.as_deref()),
     }
 }
 

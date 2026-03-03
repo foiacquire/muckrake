@@ -1,4 +1,3 @@
-pub mod categorize;
 pub mod category;
 pub mod inbox;
 pub mod ingest;
@@ -134,15 +133,8 @@ pub enum Commands {
     },
     /// Check integrity hashes
     Verify {
-        /// File reference (all files in current project if omitted)
-        reference: Option<String>,
-    },
-    /// Move a file to a different category
-    Categorize {
-        /// File reference
-        reference: String,
-        /// Target category path
-        category: String,
+        /// File references (all files in current project if omitted)
+        references: Vec<String>,
     },
     /// Add a tag to a file
     Tag {
@@ -160,8 +152,8 @@ pub enum Commands {
     },
     /// List tags (for a file, or all tags in scope)
     Tags {
-        /// File reference
-        reference: Option<String>,
+        /// File references
+        references: Vec<String>,
         /// Skip hash verification (faster, but won't detect stale tags)
         #[arg(long)]
         no_hash_check: bool,
@@ -223,13 +215,13 @@ pub enum Commands {
     },
     /// List signs (attestations) for files
     Signs {
-        /// File reference (all files if omitted)
-        reference: Option<String>,
+        /// File references (all files if omitted)
+        references: Vec<String>,
     },
     /// Show pipeline state for files
     State {
-        /// File reference (all files if omitted)
-        reference: Option<String>,
+        /// File references (all files if omitted)
+        references: Vec<String>,
         /// Filter to a specific pipeline
         #[arg(long)]
         pipeline: Option<String>,

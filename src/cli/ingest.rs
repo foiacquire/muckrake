@@ -27,15 +27,16 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
 
     let mut count = 0usize;
     for rel_path in &entries {
-        if project_db.get_file_by_path(rel_path)?.is_some() {
+        let abs_path = project_root.join(rel_path);
+        let hash = integrity::hash_file(&abs_path)?;
+        if project_db.get_file_by_hash(&hash)?.is_some() {
             continue;
         }
 
-        let abs_path = project_root.join(rel_path);
         let file_id = track_file(project_db, &abs_path, rel_path)?;
         count += 1;
 
-        if let Ok(Some(file)) = project_db.get_file_by_path(rel_path) {
+        if let Ok(Some(file)) = project_db.get_file_by_hash(&hash) {
             let protection = project_db
                 .resolve_protection(rel_path)
                 .unwrap_or(ProtectionLevel::Editable);
@@ -107,6 +108,8 @@ pub fn track_file(db: &crate::db::ProjectDb, abs_path: &Path, rel_path: &str) ->
         "timestamp": Utc::now().to_rfc3339(),
     });
 
+    // name/path are written transitionally (schema still requires NOT NULL).
+    // Phase 5 schema migration removes these columns.
     let file = TrackedFile {
         id: None,
         name: Some(file_name),

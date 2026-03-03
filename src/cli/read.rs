@@ -8,6 +8,7 @@ use crate::cli::ingest::track_file;
 use crate::cli::list::matches_tags;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
+use crate::integrity;
 use crate::reference::{
     expand_reference_scope, format_ref, parse_reference, ExpandedScope, Reference, ScopeLevel,
     TagFilter,
@@ -103,7 +104,7 @@ fn collect_bare_path(path: &str, ctx: &Context) -> Result<Vec<ResolvedEntry>> {
         return Ok(vec![]);
     }
 
-    auto_ingest(project_db, &abs_path, path);
+    auto_ingest(project_db, &abs_path, path)?;
 
     Ok(vec![ResolvedEntry {
         abs_path,
@@ -149,9 +150,9 @@ fn collect_target(
         }
 
         let abs_path = target.project_root.join(rel_path);
-        auto_ingest(&db, &abs_path, rel_path);
+        let hash = auto_ingest(&db, &abs_path, rel_path)?;
 
-        if !tags.is_empty() && !matches_tags(&db, rel_path, tags)? {
+        if !tags.is_empty() && !matches_tags(&db, &hash, tags)? {
             continue;
         }
 
@@ -166,10 +167,12 @@ fn collect_target(
     Ok(entries)
 }
 
-fn auto_ingest(db: &ProjectDb, abs_path: &Path, rel_path: &str) {
-    if db.get_file_by_path(rel_path).ok().flatten().is_none() {
+fn auto_ingest(db: &ProjectDb, abs_path: &Path, rel_path: &str) -> Result<String> {
+    let hash = integrity::hash_file(abs_path)?;
+    if db.get_file_by_hash(&hash)?.is_none() {
         let _ = track_file(db, abs_path, rel_path);
     }
+    Ok(hash)
 }
 
 fn dump_content(out: &mut impl Write, path: &Path, colorize: bool) -> Result<()> {

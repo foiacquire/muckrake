@@ -6,6 +6,7 @@ use console::style;
 use crate::cli::ingest::track_file;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
+use crate::integrity;
 use crate::reference::{
     expand_reference_scope, format_ref, parse_reference, ExpandedScope, Reference, ScopeLevel,
     TagFilter,
@@ -67,20 +68,19 @@ fn list_bare_path(path: &str, ctx: &Context) -> Result<bool> {
         return Ok(false);
     }
 
-    let was_tracked = project_db.get_file_by_path(path)?.is_some();
+    let hash = integrity::hash_file(&abs_path)?;
+    let was_tracked = project_db.get_file_by_hash(&hash)?.is_some();
     if !was_tracked {
         if let Err(e) = track_file(project_db, &abs_path, path) {
             eprintln!("  warning: could not auto-ingest {path}: {e}");
         }
     }
 
-    let file = project_db.get_file_by_path(path)?;
     let file_name = abs_path.file_name().map_or_else(
         || "unnamed".to_string(),
         |n| n.to_string_lossy().to_string(),
     );
-    let sha256 = file.as_ref().map(|f| f.sha256.as_str());
-    print_file(&file_name, path, sha256, was_tracked);
+    print_file(&file_name, path, Some(&hash), was_tracked);
     Ok(true)
 }
 
@@ -126,22 +126,19 @@ fn list_target(
             }
         }
 
-        let was_tracked = db.get_file_by_path(rel_path)?.is_some();
-        if !was_tracked {
-            let abs_path = target.project_root.join(rel_path);
-            if track_file(&db, &abs_path, rel_path).is_ok() {
-                auto_ingested += 1;
-            }
+        let abs_path = target.project_root.join(rel_path);
+        let hash = integrity::hash_file(&abs_path)?;
+        let was_tracked = db.get_file_by_hash(&hash)?.is_some();
+        if !was_tracked && track_file(&db, &abs_path, rel_path).is_ok() {
+            auto_ingested += 1;
         }
 
-        if !tags.is_empty() && !matches_tags(&db, rel_path, tags)? {
+        if !tags.is_empty() && !matches_tags(&db, &hash, tags)? {
             continue;
         }
 
-        let file = db.get_file_by_path(rel_path)?;
-        let sha256 = file.as_ref().map(|f| f.sha256.as_str());
         let ref_str = format_ref(rel_path, project_name, &db);
-        print_file(&file_name, &ref_str, sha256, was_tracked);
+        print_file(&file_name, &ref_str, Some(&hash), was_tracked);
         found = true;
     }
 
@@ -154,11 +151,10 @@ fn list_target(
 
 pub(crate) fn matches_tags(
     db: &ProjectDb,
-    rel_path: &str,
+    sha256: &str,
     tag_filters: &[TagFilter],
 ) -> Result<bool> {
-    let file = db.get_file_by_path(rel_path)?;
-    let Some(f) = file else {
+    let Some(f) = db.get_file_by_hash(sha256)? else {
         return Ok(false);
     };
     let Some(file_id) = f.id else {
