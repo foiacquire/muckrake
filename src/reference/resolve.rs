@@ -5,16 +5,33 @@ use anyhow::{bail, Result};
 
 use crate::context::Context;
 use crate::db::{ProjectDb, ProjectRow, WorkspaceDb};
+use crate::integrity;
 use crate::models::TrackedFile;
+use crate::walk;
 
 use super::parse::parse_reference;
 use super::types::{Reference, ScopeLevel, TagFilter};
+
+/// A file discovered on disk and optionally joined against the DB by content hash.
+///
+/// Paths are ephemeral (derived from the filesystem walk), never stored in the DB.
+/// The `db_file` field is populated when the file's SHA-256 matches a tracked record.
+#[derive(Debug, Clone)]
+pub struct ResolvedOnDisk {
+    pub rel_path: String,
+    pub category_name: String,
+    pub sha256: String,
+    pub fingerprint: String,
+    pub db_file: Option<TrackedFile>,
+}
 
 type ScopeExpansion<'a> = Vec<(Option<String>, Option<String>, OpenedDb<'a>)>;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedFile {
     pub project_name: Option<String>,
+    /// Filesystem-derived relative path (ephemeral, not from DB).
+    pub rel_path: String,
     pub file: TrackedFile,
 }
 
@@ -128,20 +145,26 @@ fn resolve_single(reference: &Reference, ctx: &Context) -> Result<Vec<ResolvedFi
 }
 
 fn resolve_bare_path(path: &str, ctx: &Context) -> Result<Vec<ResolvedFile>> {
-    let Context::Project { project_db, .. } = ctx else {
+    let Context::Project {
+        project_db,
+        project_root,
+        ..
+    } = ctx
+    else {
         bail!("bare path requires project context");
     };
 
-    if let Some(file) = project_db.get_file_by_path(path)? {
-        return Ok(vec![ResolvedFile {
-            project_name: None,
-            file,
-        }]);
+    let abs_path = project_root.join(path);
+    if !abs_path.is_file() {
+        return Ok(vec![]);
     }
 
-    if let Some(file) = project_db.get_file_by_name(path)? {
+    let hash = integrity::hash_file(&abs_path)?;
+    if let Some(mut file) = project_db.get_file_by_hash(&hash)? {
+        file.path = Some(path.to_string());
         return Ok(vec![ResolvedFile {
             project_name: None,
+            rel_path: path.to_string(),
             file,
         }]);
     }
@@ -158,37 +181,75 @@ fn resolve_structured(
     let pairs = expand_scope(scope, ctx)?;
     let mut results = Vec::new();
 
+    let tag_groups: Vec<Vec<&str>> = tags
+        .iter()
+        .map(|tf| tf.tags.iter().map(String::as_str).collect())
+        .collect();
+    let glob_pattern = glob.map(glob::Pattern::new).transpose()?;
+
     for (project_name, category_name, project_db) in &pairs {
-        let path_prefix = category_name.as_ref().map(|c| format!("{c}/"));
-        let tag_groups: Vec<Vec<&str>> = tags
-            .iter()
-            .map(|tf| tf.tags.iter().map(String::as_str).collect())
-            .collect();
-        let tag_group_refs: Vec<&[&str]> = tag_groups.iter().map(Vec::as_slice).collect();
+        let project_root = derive_project_root(project_name.as_ref(), ctx)?;
+        let patterns = walk::category_patterns(project_db, category_name.as_deref())?;
+        let entries = walk::walk_and_collect(&project_root, &patterns)?;
 
-        let files = project_db.list_files_filtered(path_prefix.as_deref(), &tag_group_refs)?;
+        for rel_path in entries {
+            if !matches_glob_filter(glob_pattern.as_ref(), &rel_path) {
+                continue;
+            }
 
-        let glob_pattern = glob.map(glob::Pattern::new).transpose()?;
-
-        for file in files {
-            let matches_glob = match &glob_pattern {
-                Some(pattern) => {
-                    let file_name = file.path.rsplit('/').next().unwrap_or(&file.path);
-                    pattern.matches(file_name) || pattern.matches(&file.path)
-                }
-                None => true,
+            let abs_path = project_root.join(&rel_path);
+            let hash = integrity::hash_file(&abs_path)?;
+            let Some(mut db_file) = project_db.get_file_by_hash(&hash)? else {
+                continue;
             };
 
-            if matches_glob {
-                results.push(ResolvedFile {
-                    project_name: project_name.clone(),
-                    file,
-                });
+            if !matches_tag_groups(&tag_groups, db_file.id, project_db)? {
+                continue;
             }
+
+            db_file.path = Some(rel_path.clone());
+            results.push(ResolvedFile {
+                project_name: project_name.clone(),
+                rel_path,
+                file: db_file,
+            });
         }
     }
 
     Ok(results)
+}
+
+fn matches_glob_filter(pattern: Option<&glob::Pattern>, rel_path: &str) -> bool {
+    match pattern {
+        Some(p) => {
+            let file_name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+            p.matches(file_name) || p.matches(rel_path)
+        }
+        None => true,
+    }
+}
+
+fn matches_tag_groups(
+    tag_groups: &[Vec<&str>],
+    file_id: Option<i64>,
+    db: &ProjectDb,
+) -> Result<bool> {
+    if tag_groups.is_empty() || tag_groups.iter().all(Vec::is_empty) {
+        return Ok(true);
+    }
+    let Some(id) = file_id else {
+        return Ok(false);
+    };
+    let file_tags = db.get_tags(id)?;
+    for group in tag_groups {
+        if group.is_empty() {
+            continue;
+        }
+        if !group.iter().any(|t| file_tags.iter().any(|ft| ft == t)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 enum OpenedDb<'a> {
@@ -439,15 +500,24 @@ mod tests {
     use crate::reference::parse::parse_reference;
     use tempfile::TempDir;
 
-    fn make_file(name: &str, path: &str) -> TrackedFile {
+    /// Create a file on disk at `root/rel_path` with unique content, returning the SHA-256 hash.
+    fn create_disk_file(root: &std::path::Path, rel_path: &str) -> String {
+        let abs = root.join(rel_path);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        // Use rel_path as content so every path gets a unique hash.
+        std::fs::write(&abs, rel_path.as_bytes()).unwrap();
+        crate::integrity::hash_file(&abs).unwrap()
+    }
+
+    fn make_file(name: &str, path: &str, sha256: &str) -> TrackedFile {
         TrackedFile {
             id: None,
-            name: name.to_string(),
-            path: path.to_string(),
-            sha256: Some("abc123".to_string()),
-            fingerprint: None,
+            name: Some(name.to_string()),
+            path: Some(path.to_string()),
+            sha256: sha256.to_string(),
+            fingerprint: String::new(),
             mime_type: None,
-            size: Some(100),
+            size: None,
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
             provenance: None,
             immutable: false,
@@ -535,72 +605,81 @@ mod tests {
     fn resolve_bare_path_by_path() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
-        db.insert_file(&make_file("report.pdf", "evidence/report.pdf"))
+        let hash = create_disk_file(dir.path(), "evidence/report.pdf");
+        db.insert_file(&make_file("report.pdf", "evidence/report.pdf", &hash))
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one("evidence/report.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "report.pdf");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
     }
 
     #[test]
-    fn resolve_bare_path_by_name() {
+    fn resolve_bare_name_returns_empty() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
-        db.insert_file(&make_file("report.pdf", "evidence/report.pdf"))
+        let hash = create_disk_file(dir.path(), "evidence/report.pdf");
+        db.insert_file(&make_file("report.pdf", "evidence/report.pdf", &hash))
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
+        // Bare name without valid path — no file at project_root/report.pdf
         let coll = resolve_one("report.pdf", &ctx);
-        assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.path, "evidence/report.pdf");
+        assert!(coll.files.is_empty());
     }
 
     #[test]
     fn resolve_category_scope() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
-        db.insert_file(&make_file("report.pdf", "evidence/report.pdf"))
+        let h1 = create_disk_file(dir.path(), "evidence/report.pdf");
+        let h2 = create_disk_file(dir.path(), "notes/todo.md");
+        db.insert_file(&make_file("report.pdf", "evidence/report.pdf", &h1))
             .unwrap();
-        db.insert_file(&make_file("todo.md", "notes/todo.md"))
+        db.insert_file(&make_file("todo.md", "notes/todo.md", &h2))
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "report.pdf");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
     }
 
     #[test]
     fn resolve_tag_filter() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
+        let h1 = create_disk_file(dir.path(), "evidence/report.pdf");
+        let h2 = create_disk_file(dir.path(), "evidence/memo.pdf");
         let id1 = db
-            .insert_file(&make_file("report.pdf", "evidence/report.pdf"))
+            .insert_file(&make_file("report.pdf", "evidence/report.pdf", &h1))
             .unwrap();
-        db.insert_file(&make_file("memo.pdf", "evidence/memo.pdf"))
+        db.insert_file(&make_file("memo.pdf", "evidence/memo.pdf", &h2))
             .unwrap();
         db.insert_tag(id1, "classified", "testhash", "[]").unwrap();
 
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence!classified", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "report.pdf");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
     }
 
     #[test]
     fn resolve_tag_and_or() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
+        let ha = create_disk_file(dir.path(), "evidence/a.pdf");
+        let hb = create_disk_file(dir.path(), "evidence/b.pdf");
+        let hc = create_disk_file(dir.path(), "evidence/c.pdf");
         let id1 = db
-            .insert_file(&make_file("a.pdf", "evidence/a.pdf"))
+            .insert_file(&make_file("a.pdf", "evidence/a.pdf", &ha))
             .unwrap();
         let id2 = db
-            .insert_file(&make_file("b.pdf", "evidence/b.pdf"))
+            .insert_file(&make_file("b.pdf", "evidence/b.pdf", &hb))
             .unwrap();
         let id3 = db
-            .insert_file(&make_file("c.pdf", "evidence/c.pdf"))
+            .insert_file(&make_file("c.pdf", "evidence/c.pdf", &hc))
             .unwrap();
         db.insert_tag(id1, "classified", "testhash", "[]").unwrap();
         db.insert_tag(id1, "priority", "testhash", "[]").unwrap();
@@ -612,7 +691,7 @@ mod tests {
         // classified AND priority -> only a.pdf
         let coll = resolve_one(":evidence!classified!priority", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "a.pdf");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("a.pdf"));
 
         // classified OR priority -> a.pdf, b.pdf, c.pdf
         let coll = resolve_one(":evidence!classified,priority", &ctx);
@@ -623,32 +702,36 @@ mod tests {
     fn resolve_glob_filter() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
-        db.insert_file(&make_file("report.pdf", "evidence/report.pdf"))
+        let h1 = create_disk_file(dir.path(), "evidence/report.pdf");
+        let h2 = create_disk_file(dir.path(), "evidence/photo.jpg");
+        db.insert_file(&make_file("report.pdf", "evidence/report.pdf", &h1))
             .unwrap();
-        db.insert_file(&make_file("photo.jpg", "evidence/photo.jpg"))
+        db.insert_file(&make_file("photo.jpg", "evidence/photo.jpg", &h2))
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence/*.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "report.pdf");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
     }
 
     #[test]
     fn resolve_cross_project() {
         let ws = setup_workspace();
         let (proj1_dir, db1) = add_workspace_project(&ws, "bailey");
-        db1.insert_file(&make_file("b-report.pdf", "evidence/b-report.pdf"))
+        let h1 = create_disk_file(&proj1_dir, "evidence/b-report.pdf");
+        db1.insert_file(&make_file("b-report.pdf", "evidence/b-report.pdf", &h1))
             .unwrap();
-        let (_, db2) = add_workspace_project(&ws, "george");
-        db2.insert_file(&make_file("g-report.pdf", "evidence/g-report.pdf"))
+        let (proj2_dir, db2) = add_workspace_project(&ws, "george");
+        let h2 = create_disk_file(&proj2_dir, "evidence/g-report.pdf");
+        db2.insert_file(&make_file("g-report.pdf", "evidence/g-report.pdf", &h2))
             .unwrap();
 
         let ctx = make_ws_project_ctx(&ws, &proj1_dir);
         let coll = resolve_one(":{bailey,george}.evidence", &ctx);
         assert_eq!(coll.files.len(), 2);
 
-        let names: Vec<&str> = coll.files.iter().map(|f| f.file.name.as_str()).collect();
+        let names: Vec<&str> = coll.files.iter().filter_map(|f| f.file.name.as_deref()).collect();
         assert!(names.contains(&"b-report.pdf"));
         assert!(names.contains(&"g-report.pdf"));
     }
@@ -667,22 +750,25 @@ mod tests {
     fn resolve_subcategory() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
-        db.insert_file(&make_file("email1.eml", "evidence/emails/email1.eml"))
+        let h1 = create_disk_file(dir.path(), "evidence/emails/email1.eml");
+        let h2 = create_disk_file(dir.path(), "evidence/photos/photo.jpg");
+        db.insert_file(&make_file("email1.eml", "evidence/emails/email1.eml", &h1))
             .unwrap();
-        db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg"))
+        db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg", &h2))
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence.emails", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "email1.eml");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("email1.eml"));
     }
 
     #[test]
     fn resolve_subcategory_not_category() {
         let ws = setup_workspace();
         let (proj_dir, db) = add_workspace_project(&ws, "bailey");
-        db.insert_file(&make_file("doc.pdf", "evidence/doc.pdf"))
+        let h1 = create_disk_file(&proj_dir, "evidence/doc.pdf");
+        db.insert_file(&make_file("doc.pdf", "evidence/doc.pdf", &h1))
             .unwrap();
 
         // Inside a project where "bailey" is NOT a category
@@ -690,17 +776,19 @@ mod tests {
         // :bailey.evidence → falls back to project.category
         let coll = resolve_one(":bailey.evidence", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "doc.pdf");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("doc.pdf"));
         assert_eq!(coll.files[0].project_name.as_deref(), Some("bailey"));
     }
 
     #[test]
     fn resolve_three_levels() {
         let ws = setup_workspace();
-        let (_, db) = add_workspace_project(&ws, "bailey");
-        db.insert_file(&make_file("email.eml", "evidence/emails/email.eml"))
+        let (proj_dir, db) = add_workspace_project(&ws, "bailey");
+        let h1 = create_disk_file(&proj_dir, "evidence/emails/email.eml");
+        let h2 = create_disk_file(&proj_dir, "evidence/photos/photo.jpg");
+        db.insert_file(&make_file("email.eml", "evidence/emails/email.eml", &h1))
             .unwrap();
-        db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg"))
+        db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg", &h2))
             .unwrap();
 
         let ctx = Context::Workspace {
@@ -711,24 +799,27 @@ mod tests {
         // :bailey.evidence.emails → project.category.subcategory
         let coll = resolve_one(":bailey.evidence.emails", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "email.eml");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("email.eml"));
     }
 
     #[test]
     fn resolve_subcategory_brace_expansion() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
-        db.insert_file(&make_file("email.eml", "evidence/emails/email.eml"))
+        let h1 = create_disk_file(dir.path(), "evidence/emails/email.eml");
+        let h2 = create_disk_file(dir.path(), "notes/drafts/memo.md");
+        let h3 = create_disk_file(dir.path(), "evidence/photos/photo.jpg");
+        db.insert_file(&make_file("email.eml", "evidence/emails/email.eml", &h1))
             .unwrap();
-        db.insert_file(&make_file("memo.md", "notes/drafts/memo.md"))
+        db.insert_file(&make_file("memo.md", "notes/drafts/memo.md", &h2))
             .unwrap();
-        db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg"))
+        db.insert_file(&make_file("photo.jpg", "evidence/photos/photo.jpg", &h3))
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
         // :{evidence,notes}.drafts → evidence/drafts/ and notes/drafts/
         let coll = resolve_one(":{evidence,notes}.drafts", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name, "memo.md");
+        assert_eq!(coll.files[0].file.name.as_deref(), Some("memo.md"));
     }
 }

@@ -89,12 +89,9 @@ fn verify_files(vctx: &VerifyCtx<'_>, files: &[TrackedFile]) -> Result<VerifyCou
     };
 
     for file in files {
-        let Some(ref expected_hash) = file.sha256 else {
-            counts.skipped += 1;
-            continue;
-        };
+        let expected_hash = &file.sha256;
 
-        let abs_path = vctx.root.join(&file.path);
+        let abs_path = vctx.root.join(file.path.as_deref().unwrap_or(""));
         let result = integrity::verify_file(&abs_path, expected_hash)?;
 
         print_verify_result(vctx, &result, &abs_path, file);
@@ -119,7 +116,7 @@ fn print_verify_result(
     abs_path: &Path,
     file: &TrackedFile,
 ) {
-    let ref_str = vctx.format_ref(&file.path);
+    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
     match result {
         VerifyResult::Ok => {
             eprintln!("  {} {ref_str}", style("✓").green());
@@ -132,7 +129,7 @@ fn print_verify_result(
             );
             eprintln!("    expected: {}", style(expected).dim());
             eprintln!("    actual:   {}", style(actual).dim());
-            print_chunk_diff(abs_path, file.fingerprint.as_deref());
+            print_chunk_diff(abs_path, Some(file.fingerprint.as_str()));
         }
         VerifyResult::Missing => {
             eprintln!(
@@ -163,16 +160,13 @@ fn print_chunk_diff(abs_path: &Path, fingerprint: Option<&str>) {
 }
 
 fn backfill_fingerprint(vctx: &VerifyCtx<'_>, file: &TrackedFile, abs_path: &Path) -> Result<u32> {
-    if file.fingerprint.is_some() {
-        return Ok(0);
-    }
     let file_id = file.id.unwrap_or(0);
     if file_id == 0 {
         return Ok(0);
     }
     let fp = integrity::fingerprint_file(abs_path)?;
     vctx.db.update_file_fingerprint(file_id, &fp.to_json())?;
-    let ref_str = vctx.format_ref(&file.path);
+    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
     eprintln!(
         "  {} {ref_str} stored fingerprint ({fp})",
         style("+").cyan()
@@ -181,7 +175,7 @@ fn backfill_fingerprint(vctx: &VerifyCtx<'_>, file: &TrackedFile, abs_path: &Pat
 }
 
 fn check_immutable_flag(vctx: &VerifyCtx<'_>, file: &TrackedFile, file_path: &Path) -> Result<u32> {
-    let expected = vctx.db.resolve_protection(&file.path)?;
+    let expected = vctx.db.resolve_protection(file.path.as_deref().unwrap_or(""))?;
     let file_id = file.id.unwrap_or(0);
 
     if expected == ProtectionLevel::Immutable {
@@ -203,7 +197,7 @@ fn ensure_immutable(
         return Ok(0);
     }
 
-    let ref_str = vctx.format_ref(&file.path);
+    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
     if !integrity::is_immutable(file_path)? {
         match integrity::set_immutable(file_path) {
             Ok(()) => {
@@ -239,7 +233,7 @@ fn clear_unexpected_immutable(
     file_id: i64,
     expected: ProtectionLevel,
 ) -> Result<u32> {
-    let ref_str = vctx.format_ref(&file.path);
+    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
     if file_path.exists() {
         if let Err(e) = integrity::clear_immutable(file_path) {
             eprintln!(

@@ -21,7 +21,7 @@ fn fire_tag_event(
         event: trigger,
         file: Some(file),
         file_id: Some(file_id),
-        rel_path: Some(&file.path),
+        rel_path: file.path.as_deref(),
         tag_name: Some(tag),
         target_category: None,
         pipeline_name: None,
@@ -37,14 +37,14 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let project_name = ctx.project_name();
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    let abs_path = project_root.join(&file.path);
+    let abs_path = project_root.join(file.path.as_deref().unwrap_or(""));
     let (hash, fingerprint) = integrity::hash_and_fingerprint(&abs_path)?;
     let fp_json = fingerprint.to_json();
 
     project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
 
     let short_hash = &hash[..10];
-    let ref_str = format_ref(&file.path, project_name, project_db);
+    let ref_str = format_ref(file.path.as_deref().unwrap_or(""), project_name, project_db);
     eprintln!("Tagged '{ref_str}' with '{tag}' (sha256: {short_hash}...)");
 
     fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Tag);
@@ -59,7 +59,7 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let removed = project_db.remove_tag(file_id, tag)?;
-    let ref_str = format_ref(&file.path, project_name, project_db);
+    let ref_str = format_ref(file.path.as_deref().unwrap_or(""), project_name, project_db);
     if removed == 0 {
         bail!("tag '{tag}' not found on '{ref_str}'");
     }
@@ -85,7 +85,7 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
     if let Some(r) = reference {
         let (file, file_id) = resolve_file_ref(r, &ctx)?;
         let tags = project_db.get_tags(file_id)?;
-        let ref_str = format_ref(&file.path, project_name, project_db);
+        let ref_str = format_ref(file.path.as_deref().unwrap_or(""), project_name, project_db);
         if tags.is_empty() {
             eprintln!("No tags on '{ref_str}'");
         } else {
@@ -94,7 +94,7 @@ pub fn run_tags(cwd: &Path, reference: Option<&str>, no_hash_check: bool) -> Res
                 let status = if no_hash_check {
                     String::new()
                 } else {
-                    format_tag_status(project_db, project_root, file_id, tag, &file.path)
+                    format_tag_status(project_db, project_root, file_id, tag, file.path.as_deref().unwrap_or(""))
                 };
                 println!("  {}{status}", style(tag).cyan());
             }

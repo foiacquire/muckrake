@@ -317,13 +317,14 @@ fn resolve_file_refs(
     let mut infos = Vec::new();
 
     for rf in &collection.files {
+        let rel_path = rf.file.path.as_deref().unwrap_or("");
         let abs_path = project_root
-            .join(&rf.file.path)
+            .join(rel_path)
             .to_string_lossy()
             .to_string();
         file_paths.push(abs_path);
 
-        let ext = rf.file.name.rsplit('.').next().unwrap_or("*").to_string();
+        let ext = rf.file.name.as_deref().unwrap_or("").rsplit('.').next().unwrap_or("*").to_string();
         let tags = rf
             .file
             .id
@@ -332,7 +333,7 @@ fn resolve_file_refs(
             .unwrap_or_default();
 
         infos.push(ResolvedFileInfo {
-            path: rf.file.path.clone(),
+            path: rel_path.to_string(),
             file_ext: ext,
             tags,
         });

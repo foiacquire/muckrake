@@ -50,6 +50,32 @@ fn walk_recursive(
     Ok(())
 }
 
+/// A file discovered on disk with its computed integrity hashes.
+pub struct IdentifiedFile {
+    pub rel_path: String,
+    pub sha256: String,
+    pub fingerprint_json: String,
+}
+
+/// Walk `root` matching `patterns`, computing SHA-256 and fingerprint for each file.
+///
+/// Combines `walk_and_collect` with `integrity::hash_and_fingerprint` to produce
+/// a list of files with their content identifiers, ready for DB joining.
+pub fn walk_and_identify(root: &Path, patterns: &[glob::Pattern]) -> Result<Vec<IdentifiedFile>> {
+    let paths = walk_and_collect(root, patterns)?;
+    let mut results = Vec::with_capacity(paths.len());
+    for rel_path in paths {
+        let abs_path = root.join(&rel_path);
+        let (sha256, fingerprint) = crate::integrity::hash_and_fingerprint(&abs_path)?;
+        results.push(IdentifiedFile {
+            rel_path,
+            sha256,
+            fingerprint_json: fingerprint.to_json(),
+        });
+    }
+    Ok(results)
+}
+
 /// Build glob patterns that match files belonging to a given category.
 ///
 /// - `None` -> match everything (`**`)

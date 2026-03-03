@@ -213,10 +213,10 @@ impl ProjectDb {
                 Files::Immutable,
             ])
             .values_panic([
-                file.name.as_str().into(),
-                file.path.as_str().into(),
-                file.sha256.clone().into(),
-                file.fingerprint.clone().into(),
+                file.name.clone().into(),
+                file.path.clone().into(),
+                file.sha256.as_str().into(),
+                file.fingerprint.as_str().into(),
                 file.mime_type.clone().into(),
                 file.size.into(),
                 file.ingested_at.as_str().into(),
@@ -366,6 +366,61 @@ impl ProjectDb {
             .build_rusqlite(SqliteQueryBuilder);
         self.conn.execute(&sql, &*values.as_params())?;
         Ok(())
+    }
+
+    pub fn get_file_by_hash(&self, sha256: &str) -> Result<Option<TrackedFile>> {
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .and_where(Expr::col(Files::Sha256).eq(sha256))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_file)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_file_by_fingerprint(&self, fingerprint: &str) -> Result<Option<TrackedFile>> {
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .and_where(Expr::col(Files::Fingerprint).eq(fingerprint))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_file)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_all_files(&self) -> Result<Vec<TrackedFile>> {
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .order_by(Files::Id, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_file)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_files_by_hashes(&self, hashes: &[&str]) -> Result<Vec<TrackedFile>> {
+        if hashes.is_empty() {
+            return Ok(vec![]);
+        }
+        let hash_values: Vec<sea_query::Value> = hashes.iter().map(|h| (*h).into()).collect();
+        let (sql, values) = Query::select()
+            .columns(FILE_COLUMNS)
+            .from(Files::Table)
+            .and_where(Expr::col(Files::Sha256).is_in(hash_values))
+            .order_by(Files::Id, Order::Asc)
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_file)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn insert_tag(
@@ -1090,8 +1145,8 @@ fn row_to_file(row: &rusqlite::Row) -> rusqlite::Result<TrackedFile> {
         id: Some(row.get(0)?),
         name: row.get(1)?,
         path: row.get(2)?,
-        sha256: row.get(3)?,
-        fingerprint: row.get(4)?,
+        sha256: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        fingerprint: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
         mime_type: row.get(5)?,
         size: row.get(6)?,
         ingested_at: row.get(7)?,
@@ -1380,10 +1435,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: "test.pdf".to_string(),
-            path: "evidence/test.pdf".to_string(),
-            sha256: Some("abc123".to_string()),
-            fingerprint: None,
+            name: Some("test.pdf".to_string()),
+            path: Some("evidence/test.pdf".to_string()),
+            sha256: "abc123".to_string(),
+            fingerprint: String::new(),
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1394,11 +1449,11 @@ mod tests {
         assert!(id > 0);
 
         let found = db.get_file_by_name("test.pdf").unwrap().unwrap();
-        assert_eq!(found.path, "evidence/test.pdf");
+        assert_eq!(found.path.as_deref(), Some("evidence/test.pdf"));
         assert!(found.immutable);
 
         let found_by_path = db.get_file_by_path("evidence/test.pdf").unwrap().unwrap();
-        assert_eq!(found_by_path.name, "test.pdf");
+        assert_eq!(found_by_path.name.as_deref(), Some("test.pdf"));
 
         let files = db.list_files(None).unwrap();
         assert_eq!(files.len(), 1);
@@ -1415,10 +1470,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: "recording.wav".to_string(),
-            path: "evidence/recording.wav".to_string(),
-            sha256: Some("def456".to_string()),
-            fingerprint: None,
+            name: Some("recording.wav".to_string()),
+            path: Some("evidence/recording.wav".to_string()),
+            sha256: "def456".to_string(),
+            fingerprint: String::new(),
             mime_type: Some("audio/wav".to_string()),
             size: Some(2048),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1439,7 +1494,7 @@ mod tests {
 
         let by_tag = db.list_files_by_tag("speech").unwrap();
         assert_eq!(by_tag.len(), 1);
-        assert_eq!(by_tag[0].name, "recording.wav");
+        assert_eq!(by_tag[0].name.as_deref(), Some("recording.wav"));
     }
 
     #[test]
@@ -1447,10 +1502,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: "doc.pdf".to_string(),
-            path: "evidence/doc.pdf".to_string(),
-            sha256: Some("abc123".to_string()),
-            fingerprint: None,
+            name: Some("doc.pdf".to_string()),
+            path: Some("evidence/doc.pdf".to_string()),
+            sha256: "abc123".to_string(),
+            fingerprint: String::new(),
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1475,10 +1530,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: "doc.pdf".to_string(),
-            path: "evidence/doc.pdf".to_string(),
-            sha256: Some("abc123".to_string()),
-            fingerprint: None,
+            name: Some("doc.pdf".to_string()),
+            path: Some("evidence/doc.pdf".to_string()),
+            sha256: "abc123".to_string(),
+            fingerprint: String::new(),
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1732,10 +1787,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: "test.pdf".to_string(),
-            path: "test.pdf".to_string(),
-            sha256: None,
-            fingerprint: None,
+            name: Some("test.pdf".to_string()),
+            path: Some("test.pdf".to_string()),
+            sha256: String::new(),
+            fingerprint: String::new(),
             mime_type: None,
             size: None,
             ingested_at: "2025-01-01T00:00:00Z".to_string(),

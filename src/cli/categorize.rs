@@ -20,17 +20,18 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
 
     let (file, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    let file_name = &file.name;
+    let file_name = file.name.as_deref().unwrap_or("unnamed");
+    let rel_path = file.path.as_deref().unwrap_or("");
     let new_rel_path = format!("{category}/{file_name}");
 
     if project_db.match_category(&new_rel_path)?.is_none() {
         bail!("no category matches '{category}' -- use 'mkrk list' to see registered categories");
     }
 
-    let old_path = project_root.join(&file.path);
+    let old_path = project_root.join(rel_path);
     let new_path = project_root.join(&new_rel_path);
 
-    validate_move(&old_path, &new_path, &file.path)?;
+    validate_move(&old_path, &new_path, rel_path)?;
 
     if file.immutable {
         integrity::clear_immutable(&old_path)?;
@@ -43,7 +44,7 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
 
     let user = whoami();
     let detail = serde_json::json!({
-        "from": file.path,
+        "from": rel_path,
         "to": new_rel_path,
     });
     project_db.insert_audit(
@@ -54,7 +55,7 @@ pub fn run(cwd: &Path, reference: &str, category: &str) -> Result<()> {
     )?;
 
     let project_name = ctx.project_name();
-    let old_ref = format_ref(&file.path, project_name, project_db);
+    let old_ref = format_ref(rel_path, project_name, project_db);
     let new_ref = format_ref(&new_rel_path, project_name, project_db);
     eprintln!("Moved: {old_ref} -> {new_ref}");
     eprintln!("  Protection: {new_protection}");

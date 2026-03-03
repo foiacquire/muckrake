@@ -31,13 +31,14 @@ pub fn run_sign(
     let categories = project_db.list_categories()?;
     let pipelines = resolve_file_pipelines(project_db, file_id, &file, &categories, None)?;
 
-    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &file.path)?;
+    let file_path_str = file.path.as_deref().unwrap_or("");
+    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, file_path_str)?;
     let pipeline_id = pipeline.id.unwrap();
 
     validate_sign_name_for_pipeline(sign_name, pipeline)?;
 
     let signature = if gpg {
-        let file_path = project_root.join(&file.path);
+        let file_path = project_root.join(file_path_str);
         Some(create_gpg_signature(&file_path)?)
     } else {
         None
@@ -50,7 +51,7 @@ pub fn run_sign(
     project_db.insert_sign(&sign)?;
     audit_sign(project_db, file_id, &sign.signer, &pipeline.name, sign_name)?;
 
-    let ref_str = format_ref(&file.path, ctx.project_name(), project_db);
+    let ref_str = format_ref(file_path_str, ctx.project_name(), project_db);
     eprintln!(
         "Signed '{ref_str}' as '{sign_name}' in pipeline '{}'",
         pipeline.name
@@ -81,7 +82,8 @@ pub fn run_unsign(
     let categories = project_db.list_categories()?;
     let pipelines = resolve_file_pipelines(project_db, file_id, &file, &categories, None)?;
 
-    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &file.path)?;
+    let file_path_str = file.path.as_deref().unwrap_or("");
+    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, file_path_str)?;
     let pipeline_id = pipeline.id.unwrap();
 
     let sign = project_db
@@ -90,7 +92,7 @@ pub fn run_unsign(
             anyhow::anyhow!(
                 "no active sign '{}' for '{}' in pipeline '{}'",
                 sign_name,
-                file.path,
+                file_path_str,
                 pipeline.name
             )
         })?;
@@ -103,7 +105,7 @@ pub fn run_unsign(
     project_db.revoke_sign(sign.id.unwrap(), &now)?;
     audit_sign(project_db, file_id, &whoami(), &pipeline.name, sign_name)?;
 
-    let ref_str = format_ref(&file.path, ctx.project_name(), project_db);
+    let ref_str = format_ref(file_path_str, ctx.project_name(), project_db);
     eprintln!(
         "Revoked sign '{sign_name}' for '{ref_str}' in pipeline '{}'",
         pipeline.name
@@ -131,7 +133,7 @@ pub fn run_signs(cwd: &Path, reference: Option<&str>) -> Result<()> {
         }
         any_signs = true;
 
-        let ref_str = format_ref(&entry.file.path, entry.project_name.as_deref(), project_db);
+        let ref_str = format_ref(entry.file.path.as_deref().unwrap_or(""), entry.project_name.as_deref(), project_db);
         println!("{}", style(&ref_str).bold());
         for sign in &signs {
             print_sign_detail(project_db, sign, &entry.file);
@@ -167,7 +169,7 @@ pub fn run_state(cwd: &Path, reference: Option<&str>, pipeline_name: Option<&str
         any_state = true;
 
         let hash = file_hash(project_root, &entry.file, false)?;
-        let ref_str = format_ref(&entry.file.path, entry.project_name.as_deref(), project_db);
+        let ref_str = format_ref(entry.file.path.as_deref().unwrap_or(""), entry.project_name.as_deref(), project_db);
 
         println!("{}", style(&ref_str).bold());
         for pipeline in &pipelines {
@@ -234,7 +236,7 @@ fn resolve_file_pipelines(
 ) -> Result<Vec<Pipeline>> {
     let tags = project_db.get_tags(file_id)?;
     let mut pipelines =
-        project_db.get_pipelines_for_file(file_id, &file.path, categories, &tags)?;
+        project_db.get_pipelines_for_file(file_id, file.path.as_deref().unwrap_or(""), categories, &tags)?;
     if let Some(name) = pipeline_name {
         pipelines.retain(|p| p.name == name);
     }
@@ -242,13 +244,14 @@ fn resolve_file_pipelines(
 }
 
 fn file_hash(project_root: &Path, file: &TrackedFile, require_exists: bool) -> Result<String> {
-    let file_path = project_root.join(&file.path);
+    let rel_path = file.path.as_deref().unwrap_or("");
+    let file_path = project_root.join(rel_path);
     if file_path.exists() {
         integrity::hash_file(&file_path)
     } else if require_exists {
-        bail!("file not found: {}", file.path)
+        bail!("file not found: {rel_path}")
     } else {
-        Ok(file.sha256.clone().unwrap_or_default())
+        Ok(file.sha256.clone())
     }
 }
 
@@ -261,7 +264,7 @@ fn print_sign_detail(project_db: &ProjectDb, sign: &Sign, file: &TrackedFile) {
 
     let status = if sign.revoked_at.is_some() {
         style("revoked").red().to_string()
-    } else if file.sha256.as_deref() != Some(&sign.file_hash) {
+    } else if file.sha256.as_str() != sign.file_hash {
         style("stale").yellow().to_string()
     } else {
         style("valid").green().to_string()
@@ -370,7 +373,7 @@ fn fire_pipeline_rule(
         event,
         file: Some(file),
         file_id: file.id,
-        rel_path: Some(&file.path),
+        rel_path: file.path.as_deref(),
         tag_name: None,
         target_category: None,
         pipeline_name: Some(pipeline_name),

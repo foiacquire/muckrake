@@ -79,7 +79,7 @@ fn list_bare_path(path: &str, ctx: &Context) -> Result<bool> {
         || "unnamed".to_string(),
         |n| n.to_string_lossy().to_string(),
     );
-    let sha256 = file.as_ref().and_then(|f| f.sha256.as_deref());
+    let sha256 = file.as_ref().map(|f| f.sha256.as_str());
     print_file(&file_name, path, sha256, was_tracked);
     Ok(true)
 }
@@ -139,7 +139,7 @@ fn list_target(
         }
 
         let file = db.get_file_by_path(rel_path)?;
-        let sha256 = file.as_ref().and_then(|f| f.sha256.as_deref());
+        let sha256 = file.as_ref().map(|f| f.sha256.as_str());
         let ref_str = format_ref(rel_path, project_name, &db);
         print_file(&file_name, &ref_str, sha256, was_tracked);
         found = true;

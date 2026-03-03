@@ -531,10 +531,10 @@ mod tests {
     fn make_file(name: &str, path: &str) -> TrackedFile {
         TrackedFile {
             id: None,
-            name: name.to_string(),
-            path: path.to_string(),
-            sha256: Some("abc123".to_string()),
-            fingerprint: None,
+            name: Some(name.to_string()),
+            path: Some(path.to_string()),
+            sha256: "abc123".to_string(),
+            fingerprint: String::new(),
             mime_type: None,
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),

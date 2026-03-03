@@ -205,7 +205,7 @@ fn action_run_tool(rule: &Rule, event: &RuleEvent<'_>, ctx: &RuleContext<'_>) ->
             workspace_db: ctx.workspace_db,
         };
         execute_tool(&params)?;
-        eprintln!("    ran tool '{tool_name}' on '{}'", file.name);
+        eprintln!("    ran tool '{tool_name}' on '{}'", file.name.as_deref().unwrap_or("unnamed"));
     } else {
         let params = ExecuteToolParams {
             tool_name,
@@ -257,7 +257,7 @@ fn action_add_tag(
     let (hash, fingerprint) = integrity::hash_and_fingerprint(&abs_path)?;
     let fp_json = fingerprint.to_json();
     ctx.project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
-    eprintln!("    tagged '{}' with '{tag}'", file.name);
+    eprintln!("    tagged '{}' with '{tag}'", file.name.as_deref().unwrap_or("unnamed"));
     cascade_tag_event(event, TriggerEvent::Tag, tag, ctx, fired)
 }
 
@@ -270,7 +270,7 @@ fn action_remove_tag(
     let (file, file_id, _) = require_file_context(event)?;
     let tag = rule.action_config.tag.as_deref().unwrap_or("unknown");
     ctx.project_db.remove_tag(file_id, tag)?;
-    eprintln!("    untagged '{}' from '{tag}'", file.name);
+    eprintln!("    untagged '{}' from '{tag}'", file.name.as_deref().unwrap_or("unnamed"));
     cascade_tag_event(event, TriggerEvent::Untag, tag, ctx, fired)
 }
 
@@ -309,7 +309,7 @@ fn action_sign(
     ctx.project_db.insert_sign(&sign)?;
     eprintln!(
         "    signed '{}' as '{sign_name}' in '{pipeline_name}'",
-        file.name
+        file.name.as_deref().unwrap_or("unnamed")
     );
 
     let new_state = pipeline_file_state(ctx.project_db, file_id, &pipeline, &current_hash)?;
@@ -345,7 +345,7 @@ fn action_unsign(
     let Some(existing) = existing else {
         eprintln!(
             "    no active sign '{sign_name}' for '{}' in '{pipeline_name}'",
-            file.name
+            file.name.as_deref().unwrap_or("unnamed")
         );
         return Ok(());
     };
@@ -354,7 +354,7 @@ fn action_unsign(
     let current_hash = if abs_path.exists() {
         integrity::hash_file(&abs_path)?
     } else {
-        file.sha256.clone().unwrap_or_default()
+        file.sha256.clone()
     };
 
     let old_state = pipeline_file_state(ctx.project_db, file_id, &pipeline, &current_hash)?;
@@ -363,7 +363,7 @@ fn action_unsign(
     ctx.project_db.revoke_sign(existing.id.unwrap(), &now)?;
     eprintln!(
         "    revoked sign '{sign_name}' for '{}' in '{pipeline_name}'",
-        file.name
+        file.name.as_deref().unwrap_or("unnamed")
     );
 
     let new_state = pipeline_file_state(ctx.project_db, file_id, &pipeline, &current_hash)?;
@@ -517,10 +517,10 @@ mod tests {
     fn make_test_file(name: &str, path: &str, mime_type: Option<&str>) -> TrackedFile {
         TrackedFile {
             id: Some(1),
-            name: name.to_string(),
-            path: path.to_string(),
-            sha256: None,
-            fingerprint: None,
+            name: Some(name.to_string()),
+            path: Some(path.to_string()),
+            sha256: String::new(),
+            fingerprint: String::new(),
             mime_type: mime_type.map(String::from),
             size: None,
             ingested_at: String::new(),
@@ -552,10 +552,10 @@ mod tests {
     fn make_db_file(name: &str, path: &str, mime_type: Option<&str>, size: i64) -> TrackedFile {
         TrackedFile {
             id: None,
-            name: name.to_string(),
-            path: path.to_string(),
-            sha256: None,
-            fingerprint: None,
+            name: Some(name.to_string()),
+            path: Some(path.to_string()),
+            sha256: String::new(),
+            fingerprint: String::new(),
             mime_type: mime_type.map(String::from),
             size: Some(size),
             ingested_at: String::new(),

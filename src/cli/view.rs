@@ -27,19 +27,21 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     let resolved = collection.expect_one(reference)?;
     let file = resolved.file;
 
-    let file_path = project_root.join(&file.path);
+    let rel_path = file.path.as_deref().unwrap_or("");
+    let file_name = file.name.as_deref().unwrap_or("unnamed");
+    let file_path = project_root.join(rel_path);
     if !file_path.exists() {
-        bail!("file missing from disk: {}", file.path);
+        bail!("file missing from disk: {rel_path}");
     }
 
-    let protection = project_db.resolve_protection(&file.path)?;
+    let protection = project_db.resolve_protection(rel_path)?;
 
     if action == "edit" && protection == ProtectionLevel::Immutable {
-        bail!("cannot edit immutable file '{}'", file.name);
+        bail!("cannot edit immutable file '{file_name}'");
     }
 
     if action == "edit" && protection == ProtectionLevel::Protected {
-        eprintln!("Warning: editing protected file '{}'", file.name);
+        eprintln!("Warning: editing protected file '{file_name}'");
     }
 
     let (command_str, env_json) = resolve_tool_for_file(&file, action, project_db, workspace_db)?;
@@ -85,14 +87,14 @@ fn resolve_tool_for_file(
     project_db: &crate::db::ProjectDb,
     workspace_db: Option<&crate::db::WorkspaceDb>,
 ) -> Result<(String, Option<String>)> {
-    let file_ext = file.name.rsplit('.').next().unwrap_or("*");
+    let file_ext = file.name.as_deref().unwrap_or("").rsplit('.').next().unwrap_or("*");
     let tags = file
         .id
         .map(|id| project_db.get_tags(id))
         .transpose()?
         .unwrap_or_default();
 
-    let scope_chain = tools::build_scope_chain(&file.path);
+    let scope_chain = tools::build_scope_chain(file.path.as_deref().unwrap_or(""));
     let scope_refs: Vec<Option<&str>> = scope_chain.iter().map(|s| s.as_deref()).collect();
 
     let lookup = tools::ToolLookup {

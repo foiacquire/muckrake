@@ -109,10 +109,10 @@ pub fn track_file(db: &crate::db::ProjectDb, abs_path: &Path, rel_path: &str) ->
 
     let file = TrackedFile {
         id: None,
-        name: file_name,
-        path: rel_path.to_string(),
-        sha256: Some(hash),
-        fingerprint: Some(fingerprint.to_json()),
+        name: Some(file_name),
+        path: Some(rel_path.to_string()),
+        sha256: hash,
+        fingerprint: fingerprint.to_json(),
         mime_type,
         size: Some(size as i64),
         ingested_at: Utc::now().to_rfc3339(),
