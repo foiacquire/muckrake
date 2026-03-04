@@ -223,10 +223,7 @@ impl ProjectDb {
     }
 
     pub fn list_files_by_tag(&self, tag: &str) -> Result<Vec<TrackedFile>> {
-        let cols: Vec<_> = FILE_COLUMNS
-            .iter()
-            .map(|c| (Files::Table, *c))
-            .collect();
+        let cols: Vec<_> = FILE_COLUMNS.iter().map(|c| (Files::Table, *c)).collect();
         let (sql, values) = Query::select()
             .columns(cols)
             .from(Files::Table)
@@ -911,9 +908,7 @@ impl ProjectDb {
             |r| r.get(0),
         )?;
         if orphan_count > 0 {
-            eprintln!(
-                "  warning: {orphan_count} file(s) without hash/fingerprint will be dropped"
-            );
+            eprintln!("  warning: {orphan_count} file(s) without hash/fingerprint will be dropped");
         }
 
         self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;

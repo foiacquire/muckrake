@@ -60,9 +60,23 @@ pub fn run_sign(
     let new_state =
         pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
 
-    fire_pipeline_rule(&ctx, &resolved.file, &resolved.rel_path, &pipeline.name, Some(sign_name), &new_state);
+    fire_pipeline_rule(
+        &ctx,
+        &resolved.file,
+        &resolved.rel_path,
+        &pipeline.name,
+        Some(sign_name),
+        &new_state,
+    );
     if old_state != new_state {
-        fire_pipeline_rule(&ctx, &resolved.file, &resolved.rel_path, &pipeline.name, None, &new_state);
+        fire_pipeline_rule(
+            &ctx,
+            &resolved.file,
+            &resolved.rel_path,
+            &pipeline.name,
+            None,
+            &new_state,
+        );
     }
 
     Ok(())
@@ -114,7 +128,14 @@ pub fn run_unsign(
     let new_state =
         pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
     if old_state != new_state {
-        fire_pipeline_rule(&ctx, &resolved.file, &resolved.rel_path, &pipeline.name, None, &new_state);
+        fire_pipeline_rule(
+            &ctx,
+            &resolved.file,
+            &resolved.rel_path,
+            &pipeline.name,
+            None,
+            &new_state,
+        );
     }
 
     Ok(())
@@ -229,8 +250,7 @@ fn resolve_file_pipelines(
     pipeline_name: Option<&str>,
 ) -> Result<Vec<Pipeline>> {
     let tags = project_db.get_tags(file_id)?;
-    let mut pipelines =
-        project_db.get_pipelines_for_file(file_id, rel_path, categories, &tags)?;
+    let mut pipelines = project_db.get_pipelines_for_file(file_id, rel_path, categories, &tags)?;
     if let Some(name) = pipeline_name {
         pipelines.retain(|p| p.name == name);
     }

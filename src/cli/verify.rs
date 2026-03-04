@@ -37,7 +37,11 @@ pub fn run(cwd: &Path, references: &[String]) -> Result<()> {
     let user = whoami();
     project_db.insert_audit("verify", None, Some(&user), None)?;
 
-    if pending_migration && references.is_empty() && counts.modified == 0 && counts.missing.is_empty() {
+    if pending_migration
+        && references.is_empty()
+        && counts.modified == 0
+        && counts.missing.is_empty()
+    {
         eprintln!();
         eprintln!("All files verified. Migrating database to content-addressed schema...");
         project_db.finalize_content_addressed_migration()?;
@@ -196,63 +200,63 @@ impl MatchCtx<'_> {
         disk_fp: &integrity::Fingerprint,
         fp_json: &str,
     ) -> Result<Option<VerifyItem>> {
-    // 1. Exact fingerprint match — file is unchanged
-    if let Some(file) = vctx.db.get_file_by_fingerprint(fp_json)? {
-        if let Some(id) = file.id {
-            if !self.db_ids_seen.insert(id) {
-                return Ok(None);
-            }
-        }
-        return Ok(Some(VerifyItem {
-            rel_path: rel_path.to_string(),
-            pre_verified: true,
-            updated_fingerprint: None,
-            file,
-        }));
-    }
-
-    // 2. Partial fingerprint match — check if hash confirms identity
-    if !disk_fp.is_empty() {
-        if let Some(db_idx) =
-            best_partial_match(disk_fp, self.all_db_files, self.db_fps, &self.db_ids_seen)
-        {
-            let candidate = &self.all_db_files[db_idx];
-            if candidate.sha256 == hash {
-                if let Some(id) = candidate.id {
-                    self.db_ids_seen.insert(id);
+        // 1. Exact fingerprint match — file is unchanged
+        if let Some(file) = vctx.db.get_file_by_fingerprint(fp_json)? {
+            if let Some(id) = file.id {
+                if !self.db_ids_seen.insert(id) {
+                    return Ok(None);
                 }
-                return Ok(Some(VerifyItem {
-                    rel_path: rel_path.to_string(),
-                    pre_verified: true,
-                    updated_fingerprint: Some(fp_json.to_string()),
-                    file: candidate.clone(),
-                }));
+            }
+            return Ok(Some(VerifyItem {
+                rel_path: rel_path.to_string(),
+                pre_verified: true,
+                updated_fingerprint: None,
+                file,
+            }));
+        }
+
+        // 2. Partial fingerprint match — check if hash confirms identity
+        if !disk_fp.is_empty() {
+            if let Some(db_idx) =
+                best_partial_match(disk_fp, self.all_db_files, self.db_fps, &self.db_ids_seen)
+            {
+                let candidate = &self.all_db_files[db_idx];
+                if candidate.sha256 == hash {
+                    if let Some(id) = candidate.id {
+                        self.db_ids_seen.insert(id);
+                    }
+                    return Ok(Some(VerifyItem {
+                        rel_path: rel_path.to_string(),
+                        pre_verified: true,
+                        updated_fingerprint: Some(fp_json.to_string()),
+                        file: candidate.clone(),
+                    }));
+                }
             }
         }
-    }
 
-    // 3. Hash fallback — catches records with empty/missing fingerprints
-    if let Some(file) = vctx.db.get_file_by_hash(hash)? {
-        if let Some(id) = file.id {
-            if !self.db_ids_seen.insert(id) {
-                return Ok(None);
+        // 3. Hash fallback — catches records with empty/missing fingerprints
+        if let Some(file) = vctx.db.get_file_by_hash(hash)? {
+            if let Some(id) = file.id {
+                if !self.db_ids_seen.insert(id) {
+                    return Ok(None);
+                }
             }
+            let needs_update = file.fingerprint != fp_json;
+            return Ok(Some(VerifyItem {
+                rel_path: rel_path.to_string(),
+                pre_verified: true,
+                updated_fingerprint: if needs_update {
+                    Some(fp_json.to_string())
+                } else {
+                    None
+                },
+                file,
+            }));
         }
-        let needs_update = file.fingerprint != fp_json;
-        return Ok(Some(VerifyItem {
-            rel_path: rel_path.to_string(),
-            pre_verified: true,
-            updated_fingerprint: if needs_update {
-                Some(fp_json.to_string())
-            } else {
-                None
-            },
-            file,
-        }));
-    }
 
-    Ok(None)
-}
+        Ok(None)
+    }
 }
 
 /// Append MISSING items for DB records not found on disk.
@@ -300,9 +304,7 @@ fn best_partial_match(
         }
 
         // More than half of the shorter fingerprint's chunks must match
-        if matching * 2 > min_len
-            && best.is_none_or(|(_, best_score)| matching > best_score)
-        {
+        if matching * 2 > min_len && best.is_none_or(|(_, best_score)| matching > best_score) {
             best = Some((i, matching));
         }
     }
@@ -366,10 +368,7 @@ fn verify_items(vctx: &VerifyCtx<'_>, items: &[VerifyItem]) -> Result<VerifyCoun
                     if file_id > 0 {
                         vctx.db.update_file_fingerprint(file_id, new_fp)?;
                         let ref_str = vctx.format_ref(&item.rel_path);
-                        eprintln!(
-                            "  {} {ref_str} updated fingerprint",
-                            style("+").cyan()
-                        );
+                        eprintln!("  {} {ref_str} updated fingerprint", style("+").cyan());
                         counts.fixed += 1;
                     }
                 } else if file_id > 0 && item.file.fingerprint.is_empty() {
@@ -377,10 +376,7 @@ fn verify_items(vctx: &VerifyCtx<'_>, items: &[VerifyItem]) -> Result<VerifyCoun
                     let fp = integrity::fingerprint_file(&abs_path)?;
                     vctx.db.update_file_fingerprint(file_id, &fp.to_json())?;
                     let ref_str = vctx.format_ref(&item.rel_path);
-                    eprintln!(
-                        "  {} {ref_str} stored fingerprint",
-                        style("+").cyan()
-                    );
+                    eprintln!("  {} {ref_str} stored fingerprint", style("+").cyan());
                     counts.fixed += 1;
                 }
             }
@@ -446,7 +442,6 @@ fn print_chunk_diff(abs_path: &Path, fingerprint: Option<&str>) {
     }
 }
 
-
 fn check_immutable_flag(
     vctx: &VerifyCtx<'_>,
     _file: &TrackedFile,
@@ -459,7 +454,9 @@ fn check_immutable_flag(
     if expected == ProtectionLevel::Immutable {
         ensure_immutable(vctx, file_path, rel_path)
     } else if is_immutable {
-        Ok(clear_unexpected_immutable(vctx, file_path, rel_path, expected))
+        Ok(clear_unexpected_immutable(
+            vctx, file_path, rel_path, expected,
+        ))
     } else {
         Ok(0)
     }

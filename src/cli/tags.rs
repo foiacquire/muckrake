@@ -49,7 +49,14 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ref_str = format_ref(&resolved.rel_path, project_name, project_db);
     eprintln!("Tagged '{ref_str}' with '{tag}' (sha256: {short_hash}...)");
 
-    fire_tag_event(&ctx, &resolved.file, file_id, &resolved.rel_path, tag, TriggerEvent::Tag);
+    fire_tag_event(
+        &ctx,
+        &resolved.file,
+        file_id,
+        &resolved.rel_path,
+        tag,
+        TriggerEvent::Tag,
+    );
 
     Ok(())
 }
@@ -67,7 +74,14 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     }
     eprintln!("Removed tag '{tag}' from '{ref_str}'");
 
-    fire_tag_event(&ctx, &resolved.file, file_id, &resolved.rel_path, tag, TriggerEvent::Untag);
+    fire_tag_event(
+        &ctx,
+        &resolved.file,
+        file_id,
+        &resolved.rel_path,
+        tag,
+        TriggerEvent::Untag,
+    );
 
     Ok(())
 }
@@ -120,13 +134,7 @@ pub fn run_tags(cwd: &Path, references: &[String], no_hash_check: bool) -> Resul
                     let status = if no_hash_check {
                         String::new()
                     } else {
-                        format_tag_status(
-                            project_db,
-                            project_root,
-                            file_id,
-                            tag,
-                            &rf.rel_path,
-                        )
+                        format_tag_status(project_db, project_root, file_id, tag, &rf.rel_path)
                     };
                     println!("  {}{status}", style(tag).cyan());
                 }

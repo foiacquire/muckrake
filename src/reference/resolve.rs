@@ -68,7 +68,10 @@ pub fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(ResolvedFile,
     let parsed = parse_reference(reference)?;
     let collection = resolve_references(&[parsed], ctx)?;
     let resolved = collection.expect_one(reference)?;
-    let file_id = resolved.file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    let file_id = resolved
+        .file
+        .id
+        .ok_or_else(|| anyhow::anyhow!("file has no id"))?;
     Ok((resolved, file_id))
 }
 

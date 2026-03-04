@@ -167,11 +167,7 @@ impl Fingerprint {
     /// Count how many chunks at the same index match between two fingerprints.
     #[must_use]
     pub fn matching_chunks(&self, other: &Self) -> usize {
-        self.0
-            .iter()
-            .zip(&other.0)
-            .filter(|(a, b)| a == b)
-            .count()
+        self.0.iter().zip(&other.0).filter(|(a, b)| a == b).count()
     }
 }
 

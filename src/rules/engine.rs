@@ -205,7 +205,10 @@ fn action_run_tool(rule: &Rule, event: &RuleEvent<'_>, ctx: &RuleContext<'_>) ->
             workspace_db: ctx.workspace_db,
         };
         execute_tool(&params)?;
-        eprintln!("    ran tool '{tool_name}' on '{}'", file.name.as_deref().unwrap_or("unnamed"));
+        eprintln!(
+            "    ran tool '{tool_name}' on '{}'",
+            file.name.as_deref().unwrap_or("unnamed")
+        );
     } else {
         let params = ExecuteToolParams {
             tool_name,
@@ -257,7 +260,10 @@ fn action_add_tag(
     let (hash, fingerprint) = integrity::hash_and_fingerprint(&abs_path)?;
     let fp_json = fingerprint.to_json();
     ctx.project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
-    eprintln!("    tagged '{}' with '{tag}'", file.name.as_deref().unwrap_or("unnamed"));
+    eprintln!(
+        "    tagged '{}' with '{tag}'",
+        file.name.as_deref().unwrap_or("unnamed")
+    );
     cascade_tag_event(event, TriggerEvent::Tag, tag, ctx, fired)
 }
 
@@ -270,7 +276,10 @@ fn action_remove_tag(
     let (file, file_id, _) = require_file_context(event)?;
     let tag = rule.action_config.tag.as_deref().unwrap_or("unknown");
     ctx.project_db.remove_tag(file_id, tag)?;
-    eprintln!("    untagged '{}' from '{tag}'", file.name.as_deref().unwrap_or("unnamed"));
+    eprintln!(
+        "    untagged '{}' from '{tag}'",
+        file.name.as_deref().unwrap_or("unnamed")
+    );
     cascade_tag_event(event, TriggerEvent::Untag, tag, ctx, fired)
 }
 
