@@ -134,6 +134,14 @@ Three levels, from least to most restrictive:
 - **immutable** — Blocks edits entirely. Sets the filesystem immutable flag
   (`chattr +i` on Linux) so the file cannot be modified even outside `mkrk`.
 
+Protection is set per-category when adding or updating categories:
+
+```sh
+mkrk category add evidence "evidence/**" --protection immutable
+mkrk category add drafts "drafts/**" --protection editable
+mkrk category update evidence --protection protected
+```
+
 Protection only tightens through the hierarchy. If a parent category is
 immutable, a child category cannot downgrade it to editable.
 
