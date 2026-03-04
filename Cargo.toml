@@ -1,6 +1,6 @@
 [package]
 name = "muckrake"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 authors = ["Bailey \"monokrome\" Stoner <monokrome@monokro.me>"]
 license = "BSD-2-Clause"
@@ -34,6 +34,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+
+[profile.release]
+strip = true
+lto = true
 
 [lints.rust]
 unsafe_code = "deny"
