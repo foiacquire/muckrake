@@ -40,10 +40,11 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
             let protection = project_db
                 .resolve_protection(rel_path)
                 .unwrap_or(ProtectionLevel::Editable);
+            let is_immutable = integrity::is_immutable(&abs_path).unwrap_or(false);
             let ref_str = format_ref(rel_path, ctx.project_name(), project_db);
             eprintln!(
                 "  {ref_str} [{}]",
-                protection_label(project_root, &abs_path, protection, file.immutable)
+                protection_label(project_root, &abs_path, protection, is_immutable)
             );
 
             let event = RuleEvent {
@@ -88,11 +89,11 @@ pub fn track_file(db: &crate::db::ProjectDb, abs_path: &Path, rel_path: &str) ->
     let meta = std::fs::metadata(abs_path)?;
     let size = meta.len();
 
-    let file_name = abs_path.file_name().map_or_else(
-        || "unnamed".to_string(),
-        |n| n.to_string_lossy().to_string(),
-    );
-    let mime_type = guess_mime(&file_name).or_else(|| {
+    let filename = abs_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mime_type = guess_mime(&filename).or_else(|| {
         if is_executable(&meta) {
             Some("application/x-executable".to_string())
         } else {
@@ -101,26 +102,24 @@ pub fn track_file(db: &crate::db::ProjectDb, abs_path: &Path, rel_path: &str) ->
     });
 
     let protection = db.resolve_protection(rel_path)?;
-    let is_immutable = try_set_immutable(abs_path, protection);
+    try_set_immutable(abs_path, protection);
 
     let provenance = serde_json::json!({
         "method": "ingest",
         "timestamp": Utc::now().to_rfc3339(),
     });
 
-    // name/path are written transitionally (schema still requires NOT NULL).
-    // Phase 5 schema migration removes these columns.
     let file = TrackedFile {
         id: None,
-        name: Some(file_name),
-        path: Some(rel_path.to_string()),
+        name: None,
+        path: None,
         sha256: hash,
         fingerprint: fingerprint.to_json(),
         mime_type,
         size: Some(size as i64),
         ingested_at: Utc::now().to_rfc3339(),
         provenance: Some(provenance.to_string()),
-        immutable: is_immutable,
+        immutable: false,
     };
 
     let file_id = db.insert_file(&file)?;

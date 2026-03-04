@@ -25,10 +25,13 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
     let parsed = parse_reference(reference)?;
     let collection = resolve_references(&[parsed], &ctx)?;
     let resolved = collection.expect_one(reference)?;
+    let rel_path = &resolved.rel_path;
     let file = resolved.file;
 
-    let rel_path = file.path.as_deref().unwrap_or("");
-    let file_name = file.name.as_deref().unwrap_or("unnamed");
+    let file_name = Path::new(rel_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed");
     let file_path = project_root.join(rel_path);
     if !file_path.exists() {
         bail!("file missing from disk: {rel_path}");
@@ -44,7 +47,7 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
         eprintln!("Warning: editing protected file '{file_name}'");
     }
 
-    let (command_str, env_json) = resolve_tool_for_file(&file, action, project_db, workspace_db)?;
+    let (command_str, env_json) = resolve_tool_for_file(rel_path, &file, action, project_db, workspace_db)?;
     let env_map = tools::build_tool_env(env_json.as_deref(), &command_str, false)?;
 
     let (temp_dir, target_path) = resolve_open_path(&file_path, action, protection)?;
@@ -82,19 +85,23 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
 }
 
 fn resolve_tool_for_file(
+    rel_path: &str,
     file: &crate::models::TrackedFile,
     action: &str,
     project_db: &crate::db::ProjectDb,
     workspace_db: Option<&crate::db::WorkspaceDb>,
 ) -> Result<(String, Option<String>)> {
-    let file_ext = file.name.as_deref().unwrap_or("").rsplit('.').next().unwrap_or("*");
+    let file_ext = Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("*");
     let tags = file
         .id
         .map(|id| project_db.get_tags(id))
         .transpose()?
         .unwrap_or_default();
 
-    let scope_chain = tools::build_scope_chain(file.path.as_deref().unwrap_or(""));
+    let scope_chain = tools::build_scope_chain(rel_path);
     let scope_refs: Vec<Option<&str>> = scope_chain.iter().map(|s| s.as_deref()).collect();
 
     let lookup = tools::ToolLookup {

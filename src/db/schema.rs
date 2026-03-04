@@ -39,15 +39,12 @@ CREATE TABLE IF NOT EXISTS category_policy (
 
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    path TEXT NOT NULL UNIQUE,
-    sha256 TEXT,
-    fingerprint TEXT,
+    sha256 TEXT NOT NULL UNIQUE,
+    fingerprint TEXT NOT NULL,
     mime_type TEXT,
     size INTEGER,
     ingested_at TEXT NOT NULL,
-    provenance TEXT,
-    immutable INTEGER DEFAULT 0
+    provenance TEXT
 );
 
 CREATE TABLE IF NOT EXISTS entities (

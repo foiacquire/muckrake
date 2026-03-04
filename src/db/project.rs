@@ -202,150 +202,44 @@ impl ProjectDb {
         let (sql, values) = Query::insert()
             .into_table(Files::Table)
             .columns([
-                Files::Name,
-                Files::Path,
                 Files::Sha256,
                 Files::Fingerprint,
                 Files::MimeType,
                 Files::Size,
                 Files::IngestedAt,
                 Files::Provenance,
-                Files::Immutable,
             ])
             .values_panic([
-                file.name.clone().into(),
-                file.path.clone().into(),
                 file.sha256.as_str().into(),
                 file.fingerprint.as_str().into(),
                 file.mime_type.clone().into(),
                 file.size.into(),
                 file.ingested_at.as_str().into(),
                 file.provenance.clone().into(),
-                i32::from(file.immutable).into(),
             ])
             .build_rusqlite(SqliteQueryBuilder);
         self.conn.execute(&sql, &*values.as_params())?;
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn get_file_by_name(&self, name: &str) -> Result<Option<TrackedFile>> {
-        let (sql, values) = Query::select()
-            .columns(FILE_COLUMNS)
-            .from(Files::Table)
-            .and_where(Expr::col(Files::Name).eq(name))
-            .build_rusqlite(SqliteQueryBuilder);
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(&*values.as_params(), row_to_file)?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn get_file_by_path(&self, path: &str) -> Result<Option<TrackedFile>> {
-        let (sql, values) = Query::select()
-            .columns(FILE_COLUMNS)
-            .from(Files::Table)
-            .and_where(Expr::col(Files::Path).eq(path))
-            .build_rusqlite(SqliteQueryBuilder);
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(&*values.as_params(), row_to_file)?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn list_files(&self, path_prefix: Option<&str>) -> Result<Vec<TrackedFile>> {
-        let (sql, values) = Query::select()
-            .columns(FILE_COLUMNS)
-            .from(Files::Table)
-            .apply_if(path_prefix, |q, prefix| {
-                q.and_where(Expr::col(Files::Path).like(format!("{prefix}%")));
-            })
-            .order_by(Files::Path, Order::Asc)
-            .build_rusqlite(SqliteQueryBuilder);
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), row_to_file)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
     pub fn list_files_by_tag(&self, tag: &str) -> Result<Vec<TrackedFile>> {
+        let cols: Vec<_> = FILE_COLUMNS
+            .iter()
+            .map(|c| (Files::Table, *c))
+            .collect();
         let (sql, values) = Query::select()
-            .columns([
-                (Files::Table, Files::Id),
-                (Files::Table, Files::Name),
-                (Files::Table, Files::Path),
-                (Files::Table, Files::Sha256),
-                (Files::Table, Files::Fingerprint),
-                (Files::Table, Files::MimeType),
-                (Files::Table, Files::Size),
-                (Files::Table, Files::IngestedAt),
-                (Files::Table, Files::Provenance),
-                (Files::Table, Files::Immutable),
-            ])
+            .columns(cols)
             .from(Files::Table)
             .inner_join(
                 FileTags::Table,
                 Expr::col((Files::Table, Files::Id)).equals((FileTags::Table, FileTags::FileId)),
             )
             .and_where(Expr::col((FileTags::Table, FileTags::Tag)).eq(tag))
-            .order_by((Files::Table, Files::Path), Order::Asc)
+            .order_by((Files::Table, Files::Id), Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(&*values.as_params(), row_to_file)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    pub fn list_files_filtered(
-        &self,
-        path_prefix: Option<&str>,
-        tag_groups: &[&[&str]],
-    ) -> Result<Vec<TrackedFile>> {
-        if tag_groups.is_empty() {
-            return self.list_files(path_prefix);
-        }
-
-        let mut candidates = self.list_files(path_prefix)?;
-
-        for group in tag_groups {
-            if group.is_empty() {
-                continue;
-            }
-            let tag_values: Vec<sea_query::Value> = group.iter().map(|t| (*t).into()).collect();
-            let (sql, values) = Query::select()
-                .column((FileTags::Table, FileTags::FileId))
-                .from(FileTags::Table)
-                .and_where(Expr::col((FileTags::Table, FileTags::Tag)).is_in(tag_values))
-                .build_rusqlite(SqliteQueryBuilder);
-            let mut stmt = self.conn.prepare(&sql)?;
-            let matching_ids: std::collections::HashSet<i64> = stmt
-                .query_map(&*values.as_params(), |row| row.get::<_, i64>(0))?
-                .collect::<Result<_, _>>()?;
-            candidates.retain(|f| f.id.is_some_and(|id| matching_ids.contains(&id)));
-        }
-
-        Ok(candidates)
-    }
-
-    pub fn update_file_path(&self, file_id: i64, new_path: &str) -> Result<()> {
-        let (sql, values) = Query::update()
-            .table(Files::Table)
-            .value(Files::Path, new_path)
-            .and_where(Expr::col(Files::Id).eq(file_id))
-            .build_rusqlite(SqliteQueryBuilder);
-        self.conn.execute(&sql, &*values.as_params())?;
-        Ok(())
-    }
-
-    pub fn update_file_immutable(&self, file_id: i64, immutable: bool) -> Result<()> {
-        let (sql, values) = Query::update()
-            .table(Files::Table)
-            .value(Files::Immutable, i32::from(immutable))
-            .and_where(Expr::col(Files::Id).eq(file_id))
-            .build_rusqlite(SqliteQueryBuilder);
-        self.conn.execute(&sql, &*values.as_params())?;
-        Ok(())
     }
 
     pub fn update_file_sha256(&self, file_id: i64, sha256: &str) -> Result<()> {
@@ -981,6 +875,73 @@ impl ProjectDb {
     pub fn sign_count(&self) -> Result<i64> {
         super::pipeline::sign_count(&self.conn)
     }
+
+    /// Returns true if the files table still has legacy name/path columns
+    /// that need to be dropped after a successful verify.
+    pub fn needs_content_addressed_migration(&self) -> bool {
+        let version: i32 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if version >= 1 {
+            return false;
+        }
+        self.conn.prepare("SELECT name FROM files LIMIT 0").is_ok()
+    }
+
+    /// Load all file records including legacy name/path columns for the
+    /// pre-migration verify. Returns (id, path, sha256, fingerprint) tuples.
+    /// Only callable when `needs_content_addressed_migration()` is true.
+    pub fn list_files_with_legacy_paths(&self) -> Result<Vec<(i64, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, sha256, COALESCE(fingerprint, '') FROM files WHERE path IS NOT NULL AND sha256 IS NOT NULL AND sha256 != ''",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Drop legacy name/path/immutable columns from the files table.
+    /// Call only after a successful path-based verify confirms all hashes.
+    pub fn finalize_content_addressed_migration(&self) -> Result<()> {
+        let orphan_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE sha256 IS NULL OR sha256 = '' OR fingerprint IS NULL OR fingerprint = ''",
+            [],
+            |r| r.get(0),
+        )?;
+        if orphan_count > 0 {
+            eprintln!(
+                "  warning: {orphan_count} file(s) without hash/fingerprint will be dropped"
+            );
+        }
+
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        self.conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE files_new (
+                 id INTEGER PRIMARY KEY,
+                 sha256 TEXT NOT NULL UNIQUE,
+                 fingerprint TEXT NOT NULL,
+                 mime_type TEXT,
+                 size INTEGER,
+                 ingested_at TEXT NOT NULL,
+                 provenance TEXT
+             );
+             INSERT INTO files_new (id, sha256, fingerprint, mime_type, size, ingested_at, provenance)
+                 SELECT id, sha256, fingerprint, mime_type, size, ingested_at, provenance
+                 FROM files
+                 WHERE sha256 IS NOT NULL AND sha256 != ''
+                   AND fingerprint IS NOT NULL AND fingerprint != '';
+             DROP TABLE files;
+             ALTER TABLE files_new RENAME TO files;
+             PRAGMA user_version = 1;
+             COMMIT;",
+        )?;
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+        Ok(())
+    }
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -993,7 +954,25 @@ fn migrate(conn: &Connection) -> Result<()> {
     migrate_rules_table(conn)?;
     migrate_files_fingerprint(conn)?;
     migrate_file_tags_fingerprint(conn)?;
-    super::pipeline::migrate_pipeline_tables(conn)
+    super::pipeline::migrate_pipeline_tables(conn)?;
+    migrate_content_addressed(conn)
+}
+
+/// On open: if legacy columns are already gone, just stamp version.
+/// The destructive migration (dropping name/path/immutable) is triggered
+/// explicitly by `verify` after a successful path-based integrity check.
+fn migrate_content_addressed(conn: &Connection) -> Result<()> {
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 1 {
+        return Ok(());
+    }
+
+    let has_name = conn.prepare("SELECT name FROM files LIMIT 0").is_ok();
+    if !has_name {
+        conn.execute_batch("PRAGMA user_version = 1;")?;
+    }
+
+    Ok(())
 }
 
 fn migrate_category_type(conn: &Connection) -> Result<()> {
@@ -1127,31 +1106,28 @@ fn row_to_category(row: &rusqlite::Row) -> rusqlite::Result<Category> {
     })
 }
 
-const FILE_COLUMNS: [Files; 10] = [
+const FILE_COLUMNS: [Files; 7] = [
     Files::Id,
-    Files::Name,
-    Files::Path,
     Files::Sha256,
     Files::Fingerprint,
     Files::MimeType,
     Files::Size,
     Files::IngestedAt,
     Files::Provenance,
-    Files::Immutable,
 ];
 
 fn row_to_file(row: &rusqlite::Row) -> rusqlite::Result<TrackedFile> {
     Ok(TrackedFile {
         id: Some(row.get(0)?),
-        name: row.get(1)?,
-        path: row.get(2)?,
-        sha256: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-        fingerprint: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-        mime_type: row.get(5)?,
-        size: row.get(6)?,
-        ingested_at: row.get(7)?,
-        provenance: row.get(8)?,
-        immutable: row.get::<_, i32>(9)? != 0,
+        name: None,
+        path: None,
+        sha256: row.get(1)?,
+        fingerprint: row.get(2)?,
+        mime_type: row.get(3)?,
+        size: row.get(4)?,
+        ingested_at: row.get(5)?,
+        provenance: row.get(6)?,
+        immutable: false,
     })
 }
 
@@ -1417,7 +1393,7 @@ mod tests {
             let cat = Category {
                 id: None,
                 name: ct.to_string(),
-                pattern: format!("{}/**", ct),
+                pattern: format!("{ct}/**"),
                 category_type: *ct,
                 description: None,
             };
@@ -1435,34 +1411,26 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: Some("test.pdf".to_string()),
-            path: Some("evidence/test.pdf".to_string()),
+            name: None,
+            path: None,
             sha256: "abc123".to_string(),
-            fingerprint: String::new(),
+            fingerprint: "[]".to_string(),
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
             provenance: None,
-            immutable: true,
+            immutable: false,
         };
         let id = db.insert_file(&file).unwrap();
         assert!(id > 0);
 
-        let found = db.get_file_by_name("test.pdf").unwrap().unwrap();
-        assert_eq!(found.path.as_deref(), Some("evidence/test.pdf"));
-        assert!(found.immutable);
+        let found = db.get_file_by_hash("abc123").unwrap().unwrap();
+        assert_eq!(found.sha256, "abc123");
+        assert_eq!(found.mime_type.as_deref(), Some("application/pdf"));
 
-        let found_by_path = db.get_file_by_path("evidence/test.pdf").unwrap().unwrap();
-        assert_eq!(found_by_path.name.as_deref(), Some("test.pdf"));
-
-        let files = db.list_files(None).unwrap();
-        assert_eq!(files.len(), 1);
-
-        let filtered = db.list_files(Some("evidence/")).unwrap();
-        assert_eq!(filtered.len(), 1);
-
-        let empty = db.list_files(Some("notes/")).unwrap();
-        assert!(empty.is_empty());
+        let all = db.list_all_files().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].sha256, "abc123");
     }
 
     #[test]
@@ -1470,10 +1438,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: Some("recording.wav".to_string()),
-            path: Some("evidence/recording.wav".to_string()),
+            name: None,
+            path: None,
             sha256: "def456".to_string(),
-            fingerprint: String::new(),
+            fingerprint: "[]".to_string(),
             mime_type: Some("audio/wav".to_string()),
             size: Some(2048),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1494,7 +1462,7 @@ mod tests {
 
         let by_tag = db.list_files_by_tag("speech").unwrap();
         assert_eq!(by_tag.len(), 1);
-        assert_eq!(by_tag[0].name.as_deref(), Some("recording.wav"));
+        assert_eq!(by_tag[0].sha256, "def456");
     }
 
     #[test]
@@ -1502,10 +1470,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: Some("doc.pdf".to_string()),
-            path: Some("evidence/doc.pdf".to_string()),
+            name: None,
+            path: None,
             sha256: "abc123".to_string(),
-            fingerprint: String::new(),
+            fingerprint: "[]".to_string(),
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1530,10 +1498,10 @@ mod tests {
         let (_dir, db) = setup();
         let file = TrackedFile {
             id: None,
-            name: Some("doc.pdf".to_string()),
-            path: Some("evidence/doc.pdf".to_string()),
+            name: None,
+            path: None,
             sha256: "abc123".to_string(),
-            fingerprint: String::new(),
+            fingerprint: "[]".to_string(),
             mime_type: Some("application/pdf".to_string()),
             size: Some(1024),
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -1568,7 +1536,8 @@ mod tests {
     }
 
     #[test]
-    fn migrate_adds_file_hash_column() {
+    #[allow(clippy::too_many_lines)]
+    fn migrate_content_addressed_removes_name_path() {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join(".mkrk");
 
@@ -1578,6 +1547,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
                 pattern TEXT NOT NULL UNIQUE,
                 category_type TEXT NOT NULL DEFAULT 'files',
                 description TEXT
@@ -1593,6 +1563,7 @@ mod tests {
                 name TEXT NOT NULL,
                 path TEXT NOT NULL UNIQUE,
                 sha256 TEXT,
+                fingerprint TEXT,
                 mime_type TEXT,
                 size INTEGER,
                 ingested_at TEXT NOT NULL,
@@ -1602,6 +1573,8 @@ mod tests {
             CREATE TABLE IF NOT EXISTS file_tags (
                 file_id INTEGER REFERENCES files(id),
                 tag TEXT NOT NULL,
+                file_hash TEXT,
+                fingerprint TEXT,
                 PRIMARY KEY (file_id, tag)
             );
             CREATE TABLE IF NOT EXISTS tool_config (
@@ -1633,28 +1606,64 @@ mod tests {
             );",
         )
         .unwrap();
+        // File with hash/fingerprint survives migration
+        conn.execute(
+            "INSERT INTO files (name, path, sha256, fingerprint, ingested_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params!["test.pdf", "evidence/test.pdf", "abc123", "[]", "2025-01-01T00:00:00Z"],
+        )
+        .unwrap();
+        // File without hash is an orphan — dropped during migration
         conn.execute(
             "INSERT INTO files (name, path, ingested_at) VALUES (?1, ?2, ?3)",
-            rusqlite::params!["test.pdf", "test.pdf", "2025-01-01T00:00:00Z"],
+            rusqlite::params!["orphan.pdf", "orphan.pdf", "2025-01-01T00:00:00Z"],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO file_tags (file_id, tag) VALUES (1, 'old-tag')",
+            "INSERT INTO file_tags (file_id, tag) VALUES (1, 'evidence')",
             [],
         )
         .unwrap();
         drop(conn);
 
+        // Open does NOT drop columns — migration is deferred until verify
         let db = ProjectDb::open(&db_path).unwrap();
+        assert!(
+            db.needs_content_addressed_migration(),
+            "should detect pending migration"
+        );
 
+        // Legacy paths are readable for pre-migration verify
+        let legacy = db.list_files_with_legacy_paths().unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].1, "evidence/test.pdf");
+        assert_eq!(legacy[0].2, "abc123");
+        assert_eq!(legacy[0].3, "[]");
+
+        // File with hash is accessible
+        let file = db.get_file_by_hash("abc123").unwrap().unwrap();
+        assert_eq!(file.sha256, "abc123");
+
+        // Now finalize the migration (what verify calls after success)
+        db.finalize_content_addressed_migration().unwrap();
+
+        assert!(
+            !db.needs_content_addressed_migration(),
+            "migration should be complete"
+        );
+
+        // Orphan was dropped
+        let all = db.list_all_files().unwrap();
+        assert_eq!(all.len(), 1);
+
+        // Tags survived
         let tags = db.list_all_tags().unwrap();
         assert_eq!(tags.len(), 1);
-        assert_eq!(tags[0].tag, "old-tag");
-        assert_eq!(tags[0].file_hash, None);
+        assert_eq!(tags[0].tag, "evidence");
 
-        db.insert_tag(1, "new-tag", "somehash", "[]").unwrap();
-        let hash = db.get_file_tag_hash(1, "new-tag").unwrap();
-        assert_eq!(hash, Some("somehash".to_string()));
+        // Schema has no name column
+        let conn = Connection::open(&db_path).unwrap();
+        let has_name = conn.prepare("SELECT name FROM files LIMIT 0").is_ok();
+        assert!(!has_name, "name column should be removed");
     }
 
     #[test]

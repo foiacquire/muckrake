@@ -12,19 +12,6 @@ use crate::walk;
 use super::parse::parse_reference;
 use super::types::{Reference, ScopeLevel, TagFilter};
 
-/// A file discovered on disk and optionally joined against the DB by content hash.
-///
-/// Paths are ephemeral (derived from the filesystem walk), never stored in the DB.
-/// The `db_file` field is populated when the file's SHA-256 matches a tracked record.
-#[derive(Debug, Clone)]
-pub struct ResolvedOnDisk {
-    pub rel_path: String,
-    pub category_name: String,
-    pub sha256: String,
-    pub fingerprint: String,
-    pub db_file: Option<TrackedFile>,
-}
-
 type ScopeExpansion<'a> = Vec<(Option<String>, Option<String>, OpenedDb<'a>)>;
 
 #[derive(Debug, Clone)]
@@ -77,13 +64,12 @@ pub fn resolve_references(refs: &[Reference], ctx: &Context) -> Result<ResolvedC
 ///
 /// Parses the reference, resolves it against the context, asserts exactly one
 /// file matched, and extracts the required database id.
-pub fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(TrackedFile, i64)> {
+pub fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(ResolvedFile, i64)> {
     let parsed = parse_reference(reference)?;
     let collection = resolve_references(&[parsed], ctx)?;
     let resolved = collection.expect_one(reference)?;
-    let file = resolved.file;
-    let file_id = file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
-    Ok((file, file_id))
+    let file_id = resolved.file.id.ok_or_else(|| anyhow::anyhow!("file has no id"))?;
+    Ok((resolved, file_id))
 }
 
 pub struct ExpandedScope {
@@ -509,13 +495,13 @@ mod tests {
         crate::integrity::hash_file(&abs).unwrap()
     }
 
-    fn make_file(name: &str, path: &str, sha256: &str) -> TrackedFile {
+    fn make_file(_name: &str, _path: &str, sha256: &str) -> TrackedFile {
         TrackedFile {
             id: None,
-            name: Some(name.to_string()),
-            path: Some(path.to_string()),
+            name: None,
+            path: None,
             sha256: sha256.to_string(),
-            fingerprint: String::new(),
+            fingerprint: "[]".to_string(),
             mime_type: None,
             size: None,
             ingested_at: "2025-01-01T00:00:00Z".to_string(),
@@ -612,7 +598,7 @@ mod tests {
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one("evidence/report.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
+        assert_eq!(coll.files[0].rel_path, "evidence/report.pdf");
     }
 
     #[test]
@@ -643,7 +629,7 @@ mod tests {
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
+        assert_eq!(coll.files[0].rel_path, "evidence/report.pdf");
     }
 
     #[test]
@@ -662,7 +648,7 @@ mod tests {
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence!classified", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
+        assert_eq!(coll.files[0].rel_path, "evidence/report.pdf");
     }
 
     #[test]
@@ -691,7 +677,7 @@ mod tests {
         // classified AND priority -> only a.pdf
         let coll = resolve_one(":evidence!classified!priority", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("a.pdf"));
+        assert_eq!(coll.files[0].rel_path, "evidence/a.pdf");
 
         // classified OR priority -> a.pdf, b.pdf, c.pdf
         let coll = resolve_one(":evidence!classified,priority", &ctx);
@@ -712,7 +698,7 @@ mod tests {
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence/*.pdf", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("report.pdf"));
+        assert_eq!(coll.files[0].rel_path, "evidence/report.pdf");
     }
 
     #[test]
@@ -731,9 +717,9 @@ mod tests {
         let coll = resolve_one(":{bailey,george}.evidence", &ctx);
         assert_eq!(coll.files.len(), 2);
 
-        let names: Vec<&str> = coll.files.iter().filter_map(|f| f.file.name.as_deref()).collect();
-        assert!(names.contains(&"b-report.pdf"));
-        assert!(names.contains(&"g-report.pdf"));
+        let paths: Vec<&str> = coll.files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert!(paths.contains(&"evidence/b-report.pdf"));
+        assert!(paths.contains(&"evidence/g-report.pdf"));
     }
 
     #[test]
@@ -760,7 +746,7 @@ mod tests {
         let ctx = make_project_ctx(dir.path());
         let coll = resolve_one(":evidence.emails", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("email1.eml"));
+        assert_eq!(coll.files[0].rel_path, "evidence/emails/email1.eml");
     }
 
     #[test]
@@ -776,7 +762,7 @@ mod tests {
         // :bailey.evidence → falls back to project.category
         let coll = resolve_one(":bailey.evidence", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("doc.pdf"));
+        assert_eq!(coll.files[0].rel_path, "evidence/doc.pdf");
         assert_eq!(coll.files[0].project_name.as_deref(), Some("bailey"));
     }
 
@@ -799,7 +785,7 @@ mod tests {
         // :bailey.evidence.emails → project.category.subcategory
         let coll = resolve_one(":bailey.evidence.emails", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("email.eml"));
+        assert_eq!(coll.files[0].rel_path, "evidence/emails/email.eml");
     }
 
     #[test]
@@ -820,6 +806,6 @@ mod tests {
         // :{evidence,notes}.drafts → evidence/drafts/ and notes/drafts/
         let coll = resolve_one(":{evidence,notes}.drafts", &ctx);
         assert_eq!(coll.files.len(), 1);
-        assert_eq!(coll.files[0].file.name.as_deref(), Some("memo.md"));
+        assert_eq!(coll.files[0].rel_path, "notes/drafts/memo.md");
     }
 }

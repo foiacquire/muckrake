@@ -153,6 +153,26 @@ impl Fingerprint {
     pub fn chunks(&self) -> &[String] {
         &self.0
     }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Count how many chunks at the same index match between two fingerprints.
+    #[must_use]
+    pub fn matching_chunks(&self, other: &Self) -> usize {
+        self.0
+            .iter()
+            .zip(&other.0)
+            .filter(|(a, b)| a == b)
+            .count()
+    }
 }
 
 impl fmt::Display for Fingerprint {

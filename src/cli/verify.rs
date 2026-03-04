@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -9,6 +10,7 @@ use crate::integrity::{self, VerifyResult};
 use crate::models::{ProtectionLevel, TrackedFile};
 use crate::reference::{format_ref, parse_reference, resolve_references};
 use crate::util::whoami;
+use crate::walk;
 
 pub fn run(cwd: &Path, references: &[String]) -> Result<()> {
     let ctx = discover(cwd)?;
@@ -20,42 +22,51 @@ pub fn run(cwd: &Path, references: &[String]) -> Result<()> {
         name: ctx.project_name(),
     };
 
-    let files = if references.is_empty() {
-        project_db.list_all_files()?
+    let pending_migration = project_db.needs_content_addressed_migration();
+
+    let items: Vec<VerifyItem> = if pending_migration && references.is_empty() {
+        collect_legacy(&vctx)?
+    } else if references.is_empty() {
+        collect_all(&vctx)?
     } else {
-        let parsed: Vec<_> = references
-            .iter()
-            .map(|r| parse_reference(r))
-            .collect::<Result<_>>()?;
-        let collection = resolve_references(&parsed, &ctx)?;
-        if collection.files.is_empty() {
-            bail!("references matched no files");
-        }
-        if collection.files.iter().any(|rf| rf.project_name.is_some()) {
-            bail!("verify does not support cross-project references");
-        }
-        collection.files.into_iter().map(|rf| rf.file).collect()
+        collect_from_references(references, &ctx, &vctx)?
     };
 
-    let counts = verify_files(&vctx, &files)?;
-
-    eprintln!();
-    if counts.fixed > 0 {
-        eprintln!(
-            "Verified: {} ok, {} modified, {} missing, {} skipped, {} fixed",
-            counts.ok, counts.modified, counts.missing, counts.skipped, counts.fixed
-        );
-    } else {
-        eprintln!(
-            "Verified: {} ok, {} modified, {} missing, {} skipped",
-            counts.ok, counts.modified, counts.missing, counts.skipped
-        );
-    }
+    let counts = verify_items(&vctx, &items)?;
 
     let user = whoami();
     project_db.insert_audit("verify", None, Some(&user), None)?;
 
-    if counts.modified > 0 || counts.missing > 0 {
+    if pending_migration && references.is_empty() && counts.modified == 0 && counts.missing.is_empty() {
+        eprintln!();
+        eprintln!("All files verified. Migrating database to content-addressed schema...");
+        project_db.finalize_content_addressed_migration()?;
+        eprintln!("Migration complete. File paths removed from database.");
+    }
+
+    if !counts.missing.is_empty() {
+        eprintln!();
+        eprintln!("{}:", style("Missing files").yellow().bold());
+        for ref_str in &counts.missing {
+            eprintln!("  {} {}", style("?").yellow(), style(ref_str).yellow());
+        }
+    }
+
+    let missing_count = counts.missing.len();
+    eprintln!();
+    if counts.fixed > 0 {
+        eprintln!(
+            "Verified: {} ok, {} modified, {} missing, {} skipped, {} fixed",
+            counts.ok, counts.modified, missing_count, counts.skipped, counts.fixed
+        );
+    } else {
+        eprintln!(
+            "Verified: {} ok, {} modified, {} missing, {} skipped",
+            counts.ok, counts.modified, missing_count, counts.skipped
+        );
+    }
+
+    if counts.modified > 0 || missing_count > 0 {
         bail!("integrity check failed");
     }
 
@@ -74,40 +85,312 @@ impl VerifyCtx<'_> {
     }
 }
 
+struct VerifyItem {
+    rel_path: String,
+    file: TrackedFile,
+    /// True when the item was already verified during collection (fingerprint
+    /// match, partial match + hash verify, or hash fallback). Skips re-hashing
+    /// in `verify_items`.
+    pre_verified: bool,
+    /// If set, the file's fingerprint in DB should be updated to this value.
+    /// Set when a partial match or hash fallback identified a stale/missing
+    /// fingerprint that needs correcting.
+    updated_fingerprint: Option<String>,
+}
+
 struct VerifyCounts {
     ok: u32,
     modified: u32,
-    missing: u32,
+    missing: Vec<String>,
     skipped: u32,
     fixed: u32,
 }
 
-fn verify_files(vctx: &VerifyCtx<'_>, files: &[TrackedFile]) -> Result<VerifyCounts> {
+/// Pre-migration verify: use legacy stored paths to bridge DB records to disk.
+/// This is the last time stored paths are used before they're dropped.
+fn collect_legacy(vctx: &VerifyCtx<'_>) -> Result<Vec<VerifyItem>> {
+    let legacy_files = vctx.db.list_files_with_legacy_paths()?;
+    let mut items = Vec::new();
+
+    for (id, rel_path, sha256, fingerprint) in legacy_files {
+        items.push(VerifyItem {
+            rel_path,
+            pre_verified: false,
+            updated_fingerprint: None,
+            file: TrackedFile {
+                id: Some(id),
+                name: None,
+                path: None,
+                sha256,
+                fingerprint,
+                mime_type: None,
+                size: None,
+                ingested_at: String::new(),
+                provenance: None,
+                immutable: false,
+            },
+        });
+    }
+
+    Ok(items)
+}
+
+/// Walk the filesystem, fingerprint-first matching against DB.
+/// Falls back to partial fingerprint match + hash verify, then hash-only lookup.
+/// DB records with no disk match are reported as MISSING.
+fn collect_all(vctx: &VerifyCtx<'_>) -> Result<Vec<VerifyItem>> {
+    let patterns = walk::category_patterns(vctx.db, None)?;
+    let disk_files = walk::walk_and_collect(vctx.root, &patterns)?;
+
+    let all_db_files = vctx.db.list_all_files()?;
+
+    // Pre-parse DB fingerprints for partial matching
+    let db_fps: Vec<Option<integrity::Fingerprint>> = all_db_files
+        .iter()
+        .map(|f| {
+            integrity::Fingerprint::from_json(&f.fingerprint)
+                .ok()
+                .filter(|fp| !fp.is_empty())
+        })
+        .collect();
+
+    let db_ids_seen = HashSet::new();
+    let mut items = Vec::new();
+
+    let mut match_ctx = MatchCtx {
+        all_db_files: &all_db_files,
+        db_fps: &db_fps,
+        db_ids_seen,
+    };
+
+    for rel_path in &disk_files {
+        let abs_path = vctx.root.join(rel_path);
+        let (hash, disk_fp) = integrity::hash_and_fingerprint(&abs_path)?;
+        let fp_json = disk_fp.to_json();
+
+        if let Some(item) = match_ctx.match_disk_file(vctx, rel_path, &hash, &disk_fp, &fp_json)? {
+            items.push(item);
+        }
+    }
+
+    collect_missing(&all_db_files, &match_ctx.db_ids_seen, &mut items);
+    Ok(items)
+}
+
+/// Pre-parsed DB state for matching disk files against tracked records.
+struct MatchCtx<'a> {
+    all_db_files: &'a [TrackedFile],
+    db_fps: &'a [Option<integrity::Fingerprint>],
+    db_ids_seen: HashSet<i64>,
+}
+
+impl MatchCtx<'_> {
+    /// Try to match a disk file against DB records.
+    /// Returns `Some(VerifyItem)` if matched, `None` if untracked.
+    #[allow(clippy::too_many_arguments)]
+    fn match_disk_file(
+        &mut self,
+        vctx: &VerifyCtx<'_>,
+        rel_path: &str,
+        hash: &str,
+        disk_fp: &integrity::Fingerprint,
+        fp_json: &str,
+    ) -> Result<Option<VerifyItem>> {
+    // 1. Exact fingerprint match — file is unchanged
+    if let Some(file) = vctx.db.get_file_by_fingerprint(fp_json)? {
+        if let Some(id) = file.id {
+            if !self.db_ids_seen.insert(id) {
+                return Ok(None);
+            }
+        }
+        return Ok(Some(VerifyItem {
+            rel_path: rel_path.to_string(),
+            pre_verified: true,
+            updated_fingerprint: None,
+            file,
+        }));
+    }
+
+    // 2. Partial fingerprint match — check if hash confirms identity
+    if !disk_fp.is_empty() {
+        if let Some(db_idx) =
+            best_partial_match(disk_fp, self.all_db_files, self.db_fps, &self.db_ids_seen)
+        {
+            let candidate = &self.all_db_files[db_idx];
+            if candidate.sha256 == hash {
+                if let Some(id) = candidate.id {
+                    self.db_ids_seen.insert(id);
+                }
+                return Ok(Some(VerifyItem {
+                    rel_path: rel_path.to_string(),
+                    pre_verified: true,
+                    updated_fingerprint: Some(fp_json.to_string()),
+                    file: candidate.clone(),
+                }));
+            }
+        }
+    }
+
+    // 3. Hash fallback — catches records with empty/missing fingerprints
+    if let Some(file) = vctx.db.get_file_by_hash(hash)? {
+        if let Some(id) = file.id {
+            if !self.db_ids_seen.insert(id) {
+                return Ok(None);
+            }
+        }
+        let needs_update = file.fingerprint != fp_json;
+        return Ok(Some(VerifyItem {
+            rel_path: rel_path.to_string(),
+            pre_verified: true,
+            updated_fingerprint: if needs_update {
+                Some(fp_json.to_string())
+            } else {
+                None
+            },
+            file,
+        }));
+    }
+
+    Ok(None)
+}
+}
+
+/// Append MISSING items for DB records not found on disk.
+fn collect_missing(
+    all_db_files: &[TrackedFile],
+    db_ids_seen: &HashSet<i64>,
+    items: &mut Vec<VerifyItem>,
+) {
+    for file in all_db_files {
+        let id = file.id.unwrap_or(0);
+        if id > 0 && !db_ids_seen.contains(&id) {
+            let hash_preview = &file.sha256[..file.sha256.len().min(10)];
+            items.push(VerifyItem {
+                rel_path: format!("[sha256:{hash_preview}...]"),
+                pre_verified: false,
+                updated_fingerprint: None,
+                file: file.clone(),
+            });
+        }
+    }
+}
+
+/// Find the DB record with the best partial fingerprint match.
+/// Requires >50% of chunks (by the shorter fingerprint's length) to match.
+/// Skips records already matched to another disk file.
+fn best_partial_match(
+    disk_fp: &integrity::Fingerprint,
+    all_db_files: &[TrackedFile],
+    db_fps: &[Option<integrity::Fingerprint>],
+    seen: &HashSet<i64>,
+) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+
+    for (i, db_fp) in db_fps.iter().enumerate() {
+        let Some(db_fp) = db_fp else { continue };
+        let id = all_db_files[i].id.unwrap_or(0);
+        if id > 0 && seen.contains(&id) {
+            continue;
+        }
+
+        let matching = disk_fp.matching_chunks(db_fp);
+        let min_len = disk_fp.len().min(db_fp.len());
+        if min_len == 0 {
+            continue;
+        }
+
+        // More than half of the shorter fingerprint's chunks must match
+        if matching * 2 > min_len
+            && best.is_none_or(|(_, best_score)| matching > best_score)
+        {
+            best = Some((i, matching));
+        }
+    }
+
+    best.map(|(idx, _)| idx)
+}
+
+/// Resolve references and return items with filesystem-derived paths.
+fn collect_from_references(
+    references: &[String],
+    ctx: &crate::context::Context,
+    _vctx: &VerifyCtx<'_>,
+) -> Result<Vec<VerifyItem>> {
+    let parsed: Vec<_> = references
+        .iter()
+        .map(|r| parse_reference(r))
+        .collect::<Result<_>>()?;
+    let collection = resolve_references(&parsed, ctx)?;
+    if collection.files.is_empty() {
+        bail!("references matched no files");
+    }
+    if collection.files.iter().any(|rf| rf.project_name.is_some()) {
+        bail!("verify does not support cross-project references");
+    }
+    Ok(collection
+        .files
+        .into_iter()
+        .map(|rf| VerifyItem {
+            rel_path: rf.rel_path,
+            pre_verified: false,
+            updated_fingerprint: None,
+            file: rf.file,
+        })
+        .collect())
+}
+
+fn verify_items(vctx: &VerifyCtx<'_>, items: &[VerifyItem]) -> Result<VerifyCounts> {
     let mut counts = VerifyCounts {
         ok: 0,
         modified: 0,
-        missing: 0,
+        missing: Vec::new(),
         skipped: 0,
         fixed: 0,
     };
 
-    for file in files {
-        let expected_hash = &file.sha256;
+    for item in items {
+        let abs_path = vctx.root.join(&item.rel_path);
+        let result = if item.pre_verified {
+            VerifyResult::Ok
+        } else {
+            integrity::verify_file(&abs_path, &item.file.sha256)?
+        };
 
-        let abs_path = vctx.root.join(file.path.as_deref().unwrap_or(""));
-        let result = integrity::verify_file(&abs_path, expected_hash)?;
-
-        print_verify_result(vctx, &result, &abs_path, file);
+        print_verify_result(vctx, &result, &abs_path, &item.rel_path, &item.file);
         match result {
             VerifyResult::Ok => {
                 counts.ok += 1;
-                counts.fixed += backfill_fingerprint(vctx, file, &abs_path)?;
+                let file_id = item.file.id.unwrap_or(0);
+                if let Some(new_fp) = &item.updated_fingerprint {
+                    // Fingerprint update queued during collection (stale or missing)
+                    if file_id > 0 {
+                        vctx.db.update_file_fingerprint(file_id, new_fp)?;
+                        let ref_str = vctx.format_ref(&item.rel_path);
+                        eprintln!(
+                            "  {} {ref_str} updated fingerprint",
+                            style("+").cyan()
+                        );
+                        counts.fixed += 1;
+                    }
+                } else if file_id > 0 && item.file.fingerprint.is_empty() {
+                    // Backfill for legacy/reference items with no stored fingerprint
+                    let fp = integrity::fingerprint_file(&abs_path)?;
+                    vctx.db.update_file_fingerprint(file_id, &fp.to_json())?;
+                    let ref_str = vctx.format_ref(&item.rel_path);
+                    eprintln!(
+                        "  {} {ref_str} stored fingerprint",
+                        style("+").cyan()
+                    );
+                    counts.fixed += 1;
+                }
             }
             VerifyResult::Modified { .. } => counts.modified += 1,
-            VerifyResult::Missing => counts.missing += 1,
+            VerifyResult::Missing => {
+                counts.missing.push(vctx.format_ref(&item.rel_path));
+            }
         }
 
-        counts.fixed += check_immutable_flag(vctx, file, &abs_path)?;
+        counts.fixed += check_immutable_flag(vctx, &item.file, &abs_path, &item.rel_path)?;
     }
 
     Ok(counts)
@@ -117,17 +400,18 @@ fn print_verify_result(
     vctx: &VerifyCtx<'_>,
     result: &VerifyResult,
     abs_path: &Path,
+    rel_path: &str,
     file: &TrackedFile,
 ) {
-    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
+    let ref_str = vctx.format_ref(rel_path);
     match result {
         VerifyResult::Ok => {
-            eprintln!("  {} {ref_str}", style("✓").green());
+            eprintln!("  {} {ref_str}", style("\u{2713}").green());
         }
         VerifyResult::Modified { expected, actual } => {
             eprintln!(
                 "  {} {} MODIFIED",
-                style("✗").red().bold(),
+                style("\u{2717}").red().bold(),
                 style(&ref_str).red()
             );
             eprintln!("    expected: {}", style(expected).dim());
@@ -162,52 +446,35 @@ fn print_chunk_diff(abs_path: &Path, fingerprint: Option<&str>) {
     }
 }
 
-fn backfill_fingerprint(vctx: &VerifyCtx<'_>, file: &TrackedFile, abs_path: &Path) -> Result<u32> {
-    let file_id = file.id.unwrap_or(0);
-    if file_id == 0 {
-        return Ok(0);
-    }
-    let fp = integrity::fingerprint_file(abs_path)?;
-    vctx.db.update_file_fingerprint(file_id, &fp.to_json())?;
-    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
-    eprintln!(
-        "  {} {ref_str} stored fingerprint ({fp})",
-        style("+").cyan()
-    );
-    Ok(1)
-}
 
-fn check_immutable_flag(vctx: &VerifyCtx<'_>, file: &TrackedFile, file_path: &Path) -> Result<u32> {
-    let expected = vctx.db.resolve_protection(file.path.as_deref().unwrap_or(""))?;
-    let file_id = file.id.unwrap_or(0);
+fn check_immutable_flag(
+    vctx: &VerifyCtx<'_>,
+    _file: &TrackedFile,
+    file_path: &Path,
+    rel_path: &str,
+) -> Result<u32> {
+    let expected = vctx.db.resolve_protection(rel_path)?;
+    let is_immutable = file_path.exists() && integrity::is_immutable(file_path).unwrap_or(false);
 
     if expected == ProtectionLevel::Immutable {
-        ensure_immutable(vctx, file, file_path, file_id)
-    } else if file.immutable {
-        clear_unexpected_immutable(vctx, file, file_path, file_id, expected)
+        ensure_immutable(vctx, file_path, rel_path)
+    } else if is_immutable {
+        Ok(clear_unexpected_immutable(vctx, file_path, rel_path, expected))
     } else {
         Ok(0)
     }
 }
 
-fn ensure_immutable(
-    vctx: &VerifyCtx<'_>,
-    file: &TrackedFile,
-    file_path: &Path,
-    file_id: i64,
-) -> Result<u32> {
+fn ensure_immutable(vctx: &VerifyCtx<'_>, file_path: &Path, rel_path: &str) -> Result<u32> {
     if !file_path.exists() {
         return Ok(0);
     }
 
-    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
+    let ref_str = vctx.format_ref(rel_path);
     if !integrity::is_immutable(file_path)? {
         match integrity::set_immutable(file_path) {
             Ok(()) => {
                 eprintln!("  {} {ref_str} restored immutable flag", style("+").cyan());
-                if !file.immutable {
-                    vctx.db.update_file_immutable(file_id, true)?;
-                }
                 return Ok(1);
             }
             Err(e) => {
@@ -217,13 +484,6 @@ fn ensure_immutable(
                 );
             }
         }
-    } else if !file.immutable {
-        vctx.db.update_file_immutable(file_id, true)?;
-        eprintln!(
-            "  {} {ref_str} synced immutable flag to db",
-            style("+").cyan()
-        );
-        return Ok(1);
     }
 
     Ok(0)
@@ -231,25 +491,23 @@ fn ensure_immutable(
 
 fn clear_unexpected_immutable(
     vctx: &VerifyCtx<'_>,
-    file: &TrackedFile,
     file_path: &Path,
-    file_id: i64,
+    rel_path: &str,
     expected: ProtectionLevel,
-) -> Result<u32> {
-    let ref_str = vctx.format_ref(file.path.as_deref().unwrap_or(""));
+) -> u32 {
+    let ref_str = vctx.format_ref(rel_path);
     if file_path.exists() {
         if let Err(e) = integrity::clear_immutable(file_path) {
             eprintln!(
                 "  {} {ref_str} failed to clear immutable flag: {e}",
                 style("!").yellow()
             );
-            return Ok(0);
+            return 0;
         }
     }
-    vctx.db.update_file_immutable(file_id, false)?;
     eprintln!(
         "  {} {ref_str} cleared immutable flag (policy: {expected})",
         style("+").cyan()
     );
-    Ok(1)
+    1
 }

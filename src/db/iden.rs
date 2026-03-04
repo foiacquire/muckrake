@@ -18,19 +18,16 @@ pub enum CategoryPolicy {
     ProtectionLevel,
 }
 
-#[derive(Iden)]
+#[derive(Clone, Copy, Iden)]
 pub enum Files {
     Table,
     Id,
-    Name,
-    Path,
     Sha256,
     Fingerprint,
     MimeType,
     Size,
     IngestedAt,
     Provenance,
-    Immutable,
 }
 
 #[derive(Iden)]

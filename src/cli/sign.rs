@@ -24,21 +24,21 @@ pub fn run_sign(
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
-    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
+    let (resolved, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    let current_hash = file_hash(project_root, &file, true)?;
+    let current_hash = compute_file_hash(project_root, &resolved.rel_path, true)?;
 
     let categories = project_db.list_categories()?;
-    let pipelines = resolve_file_pipelines(project_db, file_id, &file, &categories, None)?;
+    let pipelines =
+        resolve_file_pipelines(project_db, file_id, &resolved.rel_path, &categories, None)?;
 
-    let file_path_str = file.path.as_deref().unwrap_or("");
-    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, file_path_str)?;
+    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &resolved.rel_path)?;
     let pipeline_id = pipeline.id.unwrap();
 
     validate_sign_name_for_pipeline(sign_name, pipeline)?;
 
     let signature = if gpg {
-        let file_path = project_root.join(file_path_str);
+        let file_path = project_root.join(&resolved.rel_path);
         Some(create_gpg_signature(&file_path)?)
     } else {
         None
@@ -51,7 +51,7 @@ pub fn run_sign(
     project_db.insert_sign(&sign)?;
     audit_sign(project_db, file_id, &sign.signer, &pipeline.name, sign_name)?;
 
-    let ref_str = format_ref(file_path_str, ctx.project_name(), project_db);
+    let ref_str = format_ref(&resolved.rel_path, ctx.project_name(), project_db);
     eprintln!(
         "Signed '{ref_str}' as '{sign_name}' in pipeline '{}'",
         pipeline.name
@@ -60,9 +60,9 @@ pub fn run_sign(
     let new_state =
         pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
 
-    fire_pipeline_rule(&ctx, &file, &pipeline.name, Some(sign_name), &new_state);
+    fire_pipeline_rule(&ctx, &resolved.file, &resolved.rel_path, &pipeline.name, Some(sign_name), &new_state);
     if old_state != new_state {
-        fire_pipeline_rule(&ctx, &file, &pipeline.name, None, &new_state);
+        fire_pipeline_rule(&ctx, &resolved.file, &resolved.rel_path, &pipeline.name, None, &new_state);
     }
 
     Ok(())
@@ -77,13 +77,13 @@ pub fn run_unsign(
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
 
-    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
+    let (resolved, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let categories = project_db.list_categories()?;
-    let pipelines = resolve_file_pipelines(project_db, file_id, &file, &categories, None)?;
+    let pipelines =
+        resolve_file_pipelines(project_db, file_id, &resolved.rel_path, &categories, None)?;
 
-    let file_path_str = file.path.as_deref().unwrap_or("");
-    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, file_path_str)?;
+    let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &resolved.rel_path)?;
     let pipeline_id = pipeline.id.unwrap();
 
     let sign = project_db
@@ -92,12 +92,12 @@ pub fn run_unsign(
             anyhow::anyhow!(
                 "no active sign '{}' for '{}' in pipeline '{}'",
                 sign_name,
-                file_path_str,
+                &resolved.rel_path,
                 pipeline.name
             )
         })?;
 
-    let current_hash = file_hash(project_root, &file, false)?;
+    let current_hash = compute_file_hash(project_root, &resolved.rel_path, false)?;
     let old_state =
         pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
 
@@ -105,7 +105,7 @@ pub fn run_unsign(
     project_db.revoke_sign(sign.id.unwrap(), &now)?;
     audit_sign(project_db, file_id, &whoami(), &pipeline.name, sign_name)?;
 
-    let ref_str = format_ref(file_path_str, ctx.project_name(), project_db);
+    let ref_str = format_ref(&resolved.rel_path, ctx.project_name(), project_db);
     eprintln!(
         "Revoked sign '{sign_name}' for '{ref_str}' in pipeline '{}'",
         pipeline.name
@@ -114,7 +114,7 @@ pub fn run_unsign(
     let new_state =
         pipeline_file_state(project_db, file_id, pipeline, &current_hash)?.current_state;
     if old_state != new_state {
-        fire_pipeline_rule(&ctx, &file, &pipeline.name, None, &new_state);
+        fire_pipeline_rule(&ctx, &resolved.file, &resolved.rel_path, &pipeline.name, None, &new_state);
     }
 
     Ok(())
@@ -133,7 +133,7 @@ pub fn run_signs(cwd: &Path, references: &[String]) -> Result<()> {
         }
         any_signs = true;
 
-        let ref_str = format_ref(entry.file.path.as_deref().unwrap_or(""), entry.project_name.as_deref(), project_db);
+        let ref_str = format_ref(&entry.rel_path, entry.project_name.as_deref(), project_db);
         println!("{}", style(&ref_str).bold());
         for sign in &signs {
             print_sign_detail(project_db, sign, &entry.file);
@@ -158,7 +158,7 @@ pub fn run_state(cwd: &Path, references: &[String], pipeline_name: Option<&str>)
         let pipelines = resolve_file_pipelines(
             project_db,
             entry.file_id,
-            &entry.file,
+            &entry.rel_path,
             &categories,
             pipeline_name,
         )?;
@@ -168,8 +168,8 @@ pub fn run_state(cwd: &Path, references: &[String], pipeline_name: Option<&str>)
         }
         any_state = true;
 
-        let hash = file_hash(project_root, &entry.file, false)?;
-        let ref_str = format_ref(entry.file.path.as_deref().unwrap_or(""), entry.project_name.as_deref(), project_db);
+        let hash = compute_file_hash(project_root, &entry.rel_path, false)?;
+        let ref_str = format_ref(&entry.rel_path, entry.project_name.as_deref(), project_db);
 
         println!("{}", style(&ref_str).bold());
         for pipeline in &pipelines {
@@ -187,74 +187,64 @@ pub fn run_state(cwd: &Path, references: &[String], pipeline_name: Option<&str>)
 struct ResolvedFileEntry {
     file: TrackedFile,
     file_id: i64,
+    rel_path: String,
     project_name: Option<String>,
 }
 
 fn resolve_files_with_ids(
     references: &[String],
     ctx: &Context,
-    project_db: &ProjectDb,
+    _project_db: &ProjectDb,
 ) -> Result<Vec<ResolvedFileEntry>> {
-    if references.is_empty() {
-        let name = ctx.project_name().map(String::from);
-        let all = project_db.list_all_files()?;
-        Ok(all
-            .into_iter()
-            .filter_map(|f| {
-                let file_id = f.id?;
-                Some(ResolvedFileEntry {
-                    file: f,
-                    file_id,
-                    project_name: name.clone(),
-                })
-            })
-            .collect())
+    let effective_refs = if references.is_empty() {
+        vec![":".to_string()]
     } else {
-        let parsed: Vec<_> = references
-            .iter()
-            .map(|r| parse_reference(r))
-            .collect::<Result<_>>()?;
-        let collection = resolve_references(&parsed, ctx)?;
-        Ok(collection
-            .files
-            .into_iter()
-            .filter_map(|rf| {
-                let file_id = rf.file.id?;
-                Some(ResolvedFileEntry {
-                    file: rf.file,
-                    file_id,
-                    project_name: rf.project_name,
-                })
+        references.to_vec()
+    };
+    let parsed: Vec<_> = effective_refs
+        .iter()
+        .map(|r| parse_reference(r))
+        .collect::<Result<_>>()?;
+    let collection = resolve_references(&parsed, ctx)?;
+    Ok(collection
+        .files
+        .into_iter()
+        .filter_map(|rf| {
+            let file_id = rf.file.id?;
+            Some(ResolvedFileEntry {
+                file: rf.file,
+                file_id,
+                rel_path: rf.rel_path,
+                project_name: rf.project_name,
             })
-            .collect())
-    }
+        })
+        .collect())
 }
 
 fn resolve_file_pipelines(
     project_db: &ProjectDb,
     file_id: i64,
-    file: &TrackedFile,
+    rel_path: &str,
     categories: &[Category],
     pipeline_name: Option<&str>,
 ) -> Result<Vec<Pipeline>> {
     let tags = project_db.get_tags(file_id)?;
     let mut pipelines =
-        project_db.get_pipelines_for_file(file_id, file.path.as_deref().unwrap_or(""), categories, &tags)?;
+        project_db.get_pipelines_for_file(file_id, rel_path, categories, &tags)?;
     if let Some(name) = pipeline_name {
         pipelines.retain(|p| p.name == name);
     }
     Ok(pipelines)
 }
 
-fn file_hash(project_root: &Path, file: &TrackedFile, require_exists: bool) -> Result<String> {
-    let rel_path = file.path.as_deref().unwrap_or("");
+fn compute_file_hash(project_root: &Path, rel_path: &str, require_exists: bool) -> Result<String> {
     let file_path = project_root.join(rel_path);
     if file_path.exists() {
         integrity::hash_file(&file_path)
     } else if require_exists {
         bail!("file not found: {rel_path}")
     } else {
-        Ok(file.sha256.clone())
+        bail!("file not found on disk: {rel_path}")
     }
 }
 
@@ -360,9 +350,11 @@ fn pipeline_file_state(
     Ok(derive_file_state(pipeline, &pipeline_signs, current_hash))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fire_pipeline_rule(
     ctx: &Context,
     file: &TrackedFile,
+    rel_path: &str,
     pipeline_name: &str,
     sign_name: Option<&str>,
     new_state: &str,
@@ -376,7 +368,7 @@ fn fire_pipeline_rule(
         event,
         file: Some(file),
         file_id: file.id,
-        rel_path: file.path.as_deref(),
+        rel_path: Some(rel_path),
         tag_name: None,
         target_category: None,
         pipeline_name: Some(pipeline_name),

@@ -514,11 +514,11 @@ mod tests {
         (dir, db)
     }
 
-    fn make_test_file(name: &str, path: &str, mime_type: Option<&str>) -> TrackedFile {
+    fn make_test_file(_name: &str, _path: &str, mime_type: Option<&str>) -> TrackedFile {
         TrackedFile {
             id: Some(1),
-            name: Some(name.to_string()),
-            path: Some(path.to_string()),
+            name: None,
+            path: None,
             sha256: String::new(),
             fingerprint: String::new(),
             mime_type: mime_type.map(String::from),
@@ -549,13 +549,13 @@ mod tests {
         }
     }
 
-    fn make_db_file(name: &str, path: &str, mime_type: Option<&str>, size: i64) -> TrackedFile {
+    fn make_db_file(sha256: &str, mime_type: Option<&str>, size: i64) -> TrackedFile {
         TrackedFile {
             id: None,
-            name: Some(name.to_string()),
-            path: Some(path.to_string()),
-            sha256: String::new(),
-            fingerprint: String::new(),
+            name: None,
+            path: None,
+            sha256: sha256.to_string(),
+            fingerprint: "[]".to_string(),
             mime_type: mime_type.map(String::from),
             size: Some(size),
             ingested_at: String::new(),
@@ -606,12 +606,14 @@ mod tests {
         name: &str,
         content: &[u8],
         mime: Option<&str>,
-    ) -> (tempfile::TempDir, ProjectDb, i64) {
+    ) -> (tempfile::TempDir, ProjectDb, i64, String) {
         let (dir, db) = setup_db();
-        std::fs::write(dir.path().join(name), content).unwrap();
-        let tracked = make_db_file(name, name, mime, content.len() as i64);
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        let hash = crate::integrity::hash_file(&path).unwrap();
+        let tracked = make_db_file(&hash, mime, content.len() as i64);
         let file_id = db.insert_file(&tracked).unwrap();
-        (dir, db, file_id)
+        (dir, db, file_id, hash)
     }
 
     fn run_rule_eval(
@@ -817,7 +819,7 @@ mod tests {
 
     #[test]
     fn evaluate_rules_add_tag_action() {
-        let (dir, db, file_id) =
+        let (dir, db, file_id, hash) =
             setup_file_env_with("test.pdf", b"fake pdf content", Some("application/pdf"));
 
         let rule = make_rule(
@@ -828,7 +830,7 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(&file, file_id, "test.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
 
@@ -839,7 +841,7 @@ mod tests {
 
     #[test]
     fn evaluate_rules_remove_tag_action() {
-        let (dir, db, file_id) = setup_file_env_with("test.pdf", b"fake pdf", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("test.pdf", b"fake pdf", None);
         db.insert_tag(file_id, "needs-review", "fakehash", "[]")
             .unwrap();
 
@@ -855,7 +857,7 @@ mod tests {
         };
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(
             &file,
             file_id,
@@ -872,7 +874,7 @@ mod tests {
 
     #[test]
     fn evaluate_rules_recursion_guard() {
-        let (dir, db, file_id) = setup_file_env_with("test.pdf", b"content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("test.pdf", b"content", None);
 
         // Rule: on tag -> add_tag (could cascade)
         let rule = make_rule(
@@ -883,7 +885,7 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(
             &file,
             file_id,
@@ -898,7 +900,7 @@ mod tests {
 
     #[test]
     fn evaluate_rules_disabled_rule_skipped() {
-        let (dir, db, file_id) = setup_file_env_with("test.pdf", b"content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("test.pdf", b"content", None);
 
         let mut rule = make_rule(
             "disabled-rule",
@@ -909,7 +911,7 @@ mod tests {
         rule.enabled = false;
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("test.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(&file, file_id, "test.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
         assert!(fired.is_empty());
@@ -919,7 +921,7 @@ mod tests {
 
     #[test]
     fn evaluate_rules_filter_rejects_mismatched_event() {
-        let (dir, db, file_id) = setup_file_env_with("test.wav", b"audio", Some("audio/wav"));
+        let (dir, db, file_id, hash) = setup_file_env_with("test.wav", b"audio", Some("audio/wav"));
 
         // Rule triggers on ingest but only for PDFs
         let mut rule = make_rule(
@@ -934,7 +936,7 @@ mod tests {
         };
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("test.wav").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(&file, file_id, "test.wav", TriggerEvent::Ingest, None);
         // Rule matched event type but filter rejected it
         let fired = run_rule_eval(&dir, &db, &event);
@@ -1082,7 +1084,7 @@ mod tests {
 
     #[test]
     fn action_sign_creates_sign_with_provenance() {
-        let (dir, db, file_id) = setup_file_env_with("report.pdf", b"evidence content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"evidence content", None);
 
         let pipeline = make_pipeline("editorial");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();
@@ -1101,7 +1103,7 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(&file, file_id, "report.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
 
@@ -1116,17 +1118,16 @@ mod tests {
 
     #[test]
     fn action_unsign_revokes_existing_sign() {
-        let (dir, db, file_id) = setup_file_env_with("report.pdf", b"evidence content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"evidence content", None);
 
         let pipeline = make_pipeline("editorial");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();
 
-        let hash = integrity::hash_file(&dir.path().join("report.pdf")).unwrap();
         let sign = Sign {
             id: None,
             pipeline_id,
             file_id,
-            file_hash: hash,
+            file_hash: hash.clone(),
             sign_name: "reviewed".to_string(),
             signer: "tester".to_string(),
             signed_at: Utc::now().to_rfc3339(),
@@ -1144,7 +1145,7 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(
             &file,
             file_id,
@@ -1162,7 +1163,7 @@ mod tests {
 
     #[test]
     fn action_unsign_missing_sign_is_noop() {
-        let (dir, db, file_id) = setup_file_env_with("report.pdf", b"evidence content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"evidence content", None);
 
         let pipeline = make_pipeline("editorial");
         db.insert_pipeline(&pipeline).unwrap();
@@ -1175,7 +1176,7 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(&file, file_id, "report.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
 
@@ -1186,7 +1187,7 @@ mod tests {
 
     #[test]
     fn action_attach_pipeline_creates_attachment() {
-        let (dir, db, _file_id) = setup_file_env_with("report.pdf", b"content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"content", None);
 
         let pipeline = make_pipeline("security");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();
@@ -1199,8 +1200,8 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
-        let event = make_event(&file, _file_id, "report.pdf", TriggerEvent::Ingest, None);
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
+        let event = make_event(&file, file_id, "report.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
 
         assert_eq!(fired.len(), 1);
@@ -1211,7 +1212,7 @@ mod tests {
 
     #[test]
     fn action_attach_pipeline_duplicate_is_idempotent() {
-        let (dir, db, _file_id) = setup_file_env_with("report.pdf", b"content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"content", None);
 
         let pipeline = make_pipeline("security");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();
@@ -1231,8 +1232,8 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
-        let event = make_event(&file, _file_id, "report.pdf", TriggerEvent::Ingest, None);
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
+        let event = make_event(&file, file_id, "report.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
 
         assert_eq!(fired.len(), 1);
@@ -1242,7 +1243,7 @@ mod tests {
 
     #[test]
     fn action_detach_pipeline_removes_attachment() {
-        let (dir, db, _file_id) = setup_file_env_with("report.pdf", b"content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"content", None);
 
         let pipeline = make_pipeline("security");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();
@@ -1261,10 +1262,10 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(
             &file,
-            _file_id,
+            file_id,
             "report.pdf",
             TriggerEvent::Untag,
             Some("classified"),
@@ -1278,7 +1279,7 @@ mod tests {
 
     #[test]
     fn sign_action_cascades_state_change() {
-        let (dir, db, file_id) = setup_file_env_with("report.pdf", b"evidence content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"evidence content", None);
 
         let pipeline = make_pipeline("editorial");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();
@@ -1310,7 +1311,7 @@ mod tests {
         };
         db.insert_rule(&tag_on_state).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let event = make_event(&file, file_id, "report.pdf", TriggerEvent::Ingest, None);
         let fired = run_rule_eval(&dir, &db, &event);
 
@@ -1324,7 +1325,7 @@ mod tests {
 
     #[test]
     fn sign_cascade_recursion_guard() {
-        let (dir, db, file_id) = setup_file_env_with("report.pdf", b"evidence content", None);
+        let (dir, db, file_id, hash) = setup_file_env_with("report.pdf", b"evidence content", None);
 
         let states = vec!["draft".to_string(), "reviewed".to_string()];
         let transitions = crate::models::Pipeline::default_transitions(&states);
@@ -1344,7 +1345,7 @@ mod tests {
         );
         db.insert_rule(&rule).unwrap();
 
-        let file = db.get_file_by_path("report.pdf").unwrap().unwrap();
+        let file = db.get_file_by_hash(&hash).unwrap().unwrap();
         let mut event = make_event(&file, file_id, "report.pdf", TriggerEvent::Sign, None);
         event.pipeline_name = Some("loop");
         event.sign_name = Some("reviewed");
@@ -1395,7 +1396,7 @@ mod tests {
 
     #[test]
     fn lifecycle_event_sign_action_requires_file_context() {
-        let (dir, db, _file_id) = setup_file_env_with("report.pdf", b"content", None);
+        let (dir, db, file_id, _hash) = setup_file_env_with("report.pdf", b"content", None);
 
         let pipeline = make_pipeline("editorial");
         db.insert_pipeline(&pipeline).unwrap();
@@ -1425,7 +1426,7 @@ mod tests {
         evaluate_rules(&event, &ctx, &mut fired).unwrap();
         assert_eq!(fired.len(), 1, "rule should fire even though action fails");
 
-        let signs = db.get_signs_for_file(_file_id).unwrap();
+        let signs = db.get_signs_for_file(file_id).unwrap();
         assert!(
             signs.is_empty(),
             "no sign should be created without file context"
@@ -1434,7 +1435,7 @@ mod tests {
 
     #[test]
     fn lifecycle_attach_pipeline_works_without_file() {
-        let (dir, db, _file_id) = setup_file_env_with("report.pdf", b"content", None);
+        let (dir, db, _file_id, _hash) = setup_file_env_with("report.pdf", b"content", None);
 
         let pipeline = make_pipeline("monitoring");
         let pipeline_id = db.insert_pipeline(&pipeline).unwrap();

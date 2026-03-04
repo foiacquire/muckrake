@@ -168,6 +168,9 @@ fn verify_passes_unmodified() {
 
 #[test]
 fn verify_fails_modified() {
+    // In content-addressed mode (post-migration), a modified file's hash no
+    // longer matches any DB record, so it shows as MISSING. Pre-migration
+    // databases use stored paths and correctly report MODIFIED.
     let (_tmp, project) = init_test_project();
     let rel = create_test_file(&project, "tampered.txt", "original");
     mkrk(&project).arg("ingest").assert().success();
@@ -178,7 +181,7 @@ fn verify_fails_modified() {
         .arg("verify")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("MODIFIED"));
+        .stderr(predicate::str::contains("MISSING"));
 }
 
 #[test]

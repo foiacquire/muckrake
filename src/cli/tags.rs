@@ -10,10 +10,12 @@ use crate::models::{TrackedFile, TriggerEvent};
 use crate::reference::{format_ref, resolve_file_ref};
 use crate::rules::RuleEvent;
 
+#[allow(clippy::too_many_arguments)]
 fn fire_tag_event(
     ctx: &Context,
     file: &TrackedFile,
     file_id: i64,
+    rel_path: &str,
     tag: &str,
     trigger: TriggerEvent,
 ) {
@@ -21,7 +23,7 @@ fn fire_tag_event(
         event: trigger,
         file: Some(file),
         file_id: Some(file_id),
-        rel_path: file.path.as_deref(),
+        rel_path: Some(rel_path),
         tag_name: Some(tag),
         target_category: None,
         pipeline_name: None,
@@ -35,19 +37,19 @@ pub fn run_tag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
     let project_name = ctx.project_name();
-    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
+    let (resolved, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    let abs_path = project_root.join(file.path.as_deref().unwrap_or(""));
+    let abs_path = project_root.join(&resolved.rel_path);
     let (hash, fingerprint) = integrity::hash_and_fingerprint(&abs_path)?;
     let fp_json = fingerprint.to_json();
 
     project_db.insert_tag(file_id, tag, &hash, &fp_json)?;
 
     let short_hash = &hash[..10];
-    let ref_str = format_ref(file.path.as_deref().unwrap_or(""), project_name, project_db);
+    let ref_str = format_ref(&resolved.rel_path, project_name, project_db);
     eprintln!("Tagged '{ref_str}' with '{tag}' (sha256: {short_hash}...)");
 
-    fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Tag);
+    fire_tag_event(&ctx, &resolved.file, file_id, &resolved.rel_path, tag, TriggerEvent::Tag);
 
     Ok(())
 }
@@ -56,16 +58,16 @@ pub fn run_untag(cwd: &Path, reference: &str, tag: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_project_root, project_db) = ctx.require_project()?;
     let project_name = ctx.project_name();
-    let (file, file_id) = resolve_file_ref(reference, &ctx)?;
+    let (resolved, file_id) = resolve_file_ref(reference, &ctx)?;
 
     let removed = project_db.remove_tag(file_id, tag)?;
-    let ref_str = format_ref(file.path.as_deref().unwrap_or(""), project_name, project_db);
+    let ref_str = format_ref(&resolved.rel_path, project_name, project_db);
     if removed == 0 {
         bail!("tag '{tag}' not found on '{ref_str}'");
     }
     eprintln!("Removed tag '{tag}' from '{ref_str}'");
 
-    fire_tag_event(&ctx, &file, file_id, tag, TriggerEvent::Untag);
+    fire_tag_event(&ctx, &resolved.file, file_id, &resolved.rel_path, tag, TriggerEvent::Untag);
 
     Ok(())
 }
@@ -109,11 +111,7 @@ pub fn run_tags(cwd: &Path, references: &[String], no_hash_check: bool) -> Resul
                 continue;
             }
             let tags = project_db.get_tags(file_id)?;
-            let ref_str = format_ref(
-                rf.file.path.as_deref().unwrap_or(""),
-                project_name,
-                project_db,
-            );
+            let ref_str = format_ref(&rf.rel_path, project_name, project_db);
             if tags.is_empty() {
                 eprintln!("No tags on '{ref_str}'");
             } else {
@@ -127,7 +125,7 @@ pub fn run_tags(cwd: &Path, references: &[String], no_hash_check: bool) -> Resul
                             project_root,
                             file_id,
                             tag,
-                            rf.file.path.as_deref().unwrap_or(""),
+                            &rf.rel_path,
                         )
                     };
                     println!("  {}{status}", style(tag).cyan());

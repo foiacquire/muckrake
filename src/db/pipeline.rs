@@ -775,7 +775,7 @@ mod tests {
         };
 
         let pipelines = db
-            .get_pipelines_for_file(1, "evidence/doc.pdf", &[cat.clone()], &[])
+            .get_pipelines_for_file(1, "evidence/doc.pdf", std::slice::from_ref(&cat), &[])
             .unwrap();
         assert_eq!(pipelines.len(), 1);
         assert_eq!(pipelines[0].name, "review");
