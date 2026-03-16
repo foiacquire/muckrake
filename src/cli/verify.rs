@@ -48,6 +48,22 @@ pub fn run(cwd: &Path, references: &[String]) -> Result<()> {
         eprintln!("Migration complete. File paths removed from database.");
     }
 
+    print_summary(&counts)
+}
+
+struct VerifyCtx<'a> {
+    root: &'a Path,
+    db: &'a ProjectDb,
+    name: Option<&'a str>,
+}
+
+impl VerifyCtx<'_> {
+    fn format_ref(&self, path: &str) -> String {
+        format_ref(path, self.name, self.db)
+    }
+}
+
+fn print_summary(counts: &VerifyCounts) -> Result<()> {
     if !counts.missing.is_empty() {
         eprintln!();
         eprintln!("{}:", style("Missing files").yellow().bold());
@@ -75,18 +91,6 @@ pub fn run(cwd: &Path, references: &[String]) -> Result<()> {
     }
 
     Ok(())
-}
-
-struct VerifyCtx<'a> {
-    root: &'a Path,
-    db: &'a ProjectDb,
-    name: Option<&'a str>,
-}
-
-impl VerifyCtx<'_> {
-    fn format_ref(&self, path: &str) -> String {
-        format_ref(path, self.name, self.db)
-    }
 }
 
 struct VerifyItem {

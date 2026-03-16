@@ -41,7 +41,10 @@ fn walk_recursive(
         if path.is_dir() {
             walk_recursive(root, &path, patterns, entries)?;
         } else if path.is_file() {
-            let rel_path = path.strip_prefix(root)?.to_string_lossy().to_string();
+            let rel_path = path
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
             if patterns.iter().any(|p| p.matches(&rel_path)) {
                 entries.push(rel_path);
             }
