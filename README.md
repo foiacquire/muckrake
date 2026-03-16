@@ -5,7 +5,7 @@ designed as much as possible to respect and even reinforce the safety of your
 data. With that said, bugs will exist. Do NOT use it on mission critical data
 without backups. It is not stable enough to recommend without backups.
 
-Chain-of-custody research management CLI for investigative journalism.
+Research management CLI for investigative journalism.
 
 `mkrk` tracks files, enforces integrity, and organizes evidence across projects
 and workspaces — designed for journalists who need to prove their documents
@@ -54,6 +54,17 @@ mkrk pipeline attach --pipeline editorial --category evidence
 mkrk sign evidence/report.pdf review --pipeline editorial
 mkrk state evidence/report.pdf
 ```
+
+## Content-addressed storage
+
+The database never stores file paths or names. Files are identified by their
+SHA-256 hash and discovered on disk via BLAKE3 chunk fingerprints. A seized
+`.mkrk` database reveals organizational methodology (categories, tags,
+pipelines) but not the file inventory.
+
+Files are matched to DB records by fingerprint first (fast), with SHA-256 hash
+as a fallback. Partial fingerprint matching recovers files that have been moved
+or had minor edits.
 
 ## Projects
 
@@ -148,32 +159,35 @@ immutable, a child category cannot downgrade it to editable.
 ## Files
 
 Files are ingested into a project with `mkrk ingest`. Ingestion computes a
-SHA-256 hash and a chunk-based fingerprint, records metadata (name, path, size,
-MIME type, timestamp), stores provenance, applies the protection level from
-matching categories, and logs the operation in the audit trail.
+SHA-256 hash and a chunk-based BLAKE3 fingerprint, records metadata (size, MIME
+type, timestamp), and stores provenance.
 
 ```sh
 mkrk ingest
-mkrk ingest document.pdf --as evidence
-mkrk ingest recording.wav --as evidence/audio
 ```
 
 ## Integrity verification
 
 `mkrk` uses a two-tier integrity model:
 
-- **Fingerprint** (fast) — 64KB chunks hashed with BLAKE3. Used for bulk
-  operations like tag queries and listings. Catches file swaps and most
-  modifications at minimal I/O cost.
-- **SHA-256** (full) — Cryptographic hash of entire file contents. Used for
-  single-file operations where authenticity matters: verify, sign, view, edit.
+- **Fingerprint** (fast) — 64KB chunks hashed with BLAKE3. Used as the primary
+  file discovery mechanism and for bulk operations like tag queries. Catches
+  file swaps and most modifications at minimal I/O cost.
+- **SHA-256** (full) — Cryptographic hash of entire file contents. The file's
+  identity in the database. Used as a fallback when fingerprints don't match
+  and for operations where authenticity matters: sign, view, edit.
 
-`mkrk verify` checks every tracked file against its stored SHA-256 hash and
-reports:
+`mkrk verify` walks the filesystem and matches files against the database:
 
-- **ok** — Hash matches.
-- **modified** — Hash differs. Shows expected and actual hashes.
-- **missing** — File not found on disk.
+1. **Exact fingerprint match** — File unchanged, no further work needed.
+2. **Partial fingerprint match** — Some chunks match a DB record. SHA-256 is
+   computed to confirm identity. If the hash matches, the stale fingerprint is
+   updated.
+3. **Hash fallback** — No fingerprint match, but SHA-256 matches a DB record.
+   Fingerprint is stored or updated.
+4. **No match** — File is untracked, skipped.
+
+DB records with no corresponding file on disk are reported as **missing**.
 
 For immutable files, verification also checks whether the filesystem immutable
 flag is still set.
@@ -300,8 +314,8 @@ mkrk rule disable auto-tag-pdfs
 
 ### Trigger events
 
-`ingest`, `tag`, `untag`, `categorize`, `sign`, `state-change`,
-`project-enter`, `workspace-enter`
+`ingest`, `tag`, `untag`, `sign`, `state-change`, `project-enter`,
+`workspace-enter`
 
 ### Actions
 
@@ -333,7 +347,6 @@ A plain path (no `:` prefix) resolves against the current project:
 
 ```
 evidence/report.pdf        # by relative path
-report.pdf                 # by file name (path match first, then name)
 ```
 
 ### Structured references
@@ -396,21 +409,13 @@ tracked files.
 
 Tools are discovered in two ways:
 
-1. **Database configs** — Registered via `mkrk tool add`, stored in the project
-   or workspace database. Resolved by action name, file type, scope, and tags.
-2. **Filesystem** — Files in directories matching categories with type `Tools`
+1. **Database configs** — Stored in the project or workspace database.
+   Resolved by action name, file type, scope, and tags.
+2. **Filesystem** — Files in directories matching categories with type `tools`
    (e.g., `tools/**`). `mkrk tool ner` looks for a file named `ner` or `ner.*`
    in those directories.
 
 Database configs take priority over filesystem discovery.
-
-### Registering tools
-
-```sh
-mkrk tool add analyze transcribe.py --file-type wav
-mkrk tool add analyze ocr.sh --file-type pdf
-mkrk tool add analyze ner.py --tag classified --file-type "*"
-```
 
 ### Resolution order
 
@@ -442,10 +447,11 @@ variables as JSON. Removing proxy variables requires explicit confirmation.
 
 ## Audit log
 
-Every significant operation (ingest, verify, categorize, edit, tool execution,
-sign, rule fire) is recorded in the audit log with a timestamp, operation type,
-affected file, user, and optional detail JSON. This provides an evidence trail
-for chain-of-custody documentation.
+Operations like ingest, verify, sign, tool execution, and view/edit are
+recorded in the audit log with a timestamp, operation type, affected file,
+user, and optional detail. This is a log of what `mkrk` did, not a complete
+record of everything that happened to the files — nothing prevents editing
+files outside of `mkrk`.
 
 ## License
 
