@@ -9,6 +9,7 @@ use crate::integrity;
 use crate::models::TrackedFile;
 use crate::walk;
 
+use super::format::format_ref;
 use super::parse::parse_reference;
 use super::types::{Reference, ScopeLevel, TagFilter};
 
@@ -19,6 +20,8 @@ pub struct ResolvedFile {
     pub project_name: Option<String>,
     /// Filesystem-derived relative path (ephemeral, not from DB).
     pub rel_path: String,
+    /// Canonical reference string (e.g., `:acme.evidence/report.pdf`).
+    pub ref_string: String,
     pub file: TrackedFile,
 }
 
@@ -73,27 +76,6 @@ pub fn resolve_file_ref(reference: &str, ctx: &Context) -> Result<(ResolvedFile,
         .id
         .ok_or_else(|| anyhow::anyhow!("file has no id"))?;
     Ok((resolved, file_id))
-}
-
-pub struct ExpandedScope {
-    pub project_name: Option<String>,
-    pub category_name: Option<String>,
-    pub project_root: PathBuf,
-}
-
-pub fn expand_reference_scope(scope: &[ScopeLevel], ctx: &Context) -> Result<Vec<ExpandedScope>> {
-    let pairs = expand_scope(scope, ctx)?;
-    pairs
-        .into_iter()
-        .map(|(project_name, category_name, _db)| {
-            let project_root = derive_project_root(project_name.as_ref(), ctx)?;
-            Ok(ExpandedScope {
-                project_name,
-                category_name,
-                project_root,
-            })
-        })
-        .collect()
 }
 
 fn derive_project_root(project_name: Option<&String>, ctx: &Context) -> Result<PathBuf> {
@@ -151,9 +133,11 @@ fn resolve_bare_path(path: &str, ctx: &Context) -> Result<Vec<ResolvedFile>> {
     let hash = integrity::hash_file(&abs_path)?;
     if let Some(mut file) = project_db.get_file_by_hash(&hash)? {
         file.path = Some(path.to_string());
+        let ref_string = format_ref(path, None, project_db);
         return Ok(vec![ResolvedFile {
             project_name: None,
             rel_path: path.to_string(),
+            ref_string,
             file,
         }]);
     }
@@ -197,9 +181,11 @@ fn resolve_structured(
             }
 
             db_file.path = Some(rel_path.clone());
+            let ref_string = format_ref(&rel_path, project_name.as_deref(), project_db);
             results.push(ResolvedFile {
                 project_name: project_name.clone(),
                 rel_path,
+                ref_string,
                 file: db_file,
             });
         }

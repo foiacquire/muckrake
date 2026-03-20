@@ -1,25 +1,12 @@
 use std::io::{self, IsTerminal, Read as _, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use console::style;
 
-use crate::cli::ingest::track_file;
-use crate::cli::list::matches_tags;
 use crate::context::{discover, Context};
-use crate::db::ProjectDb;
-use crate::integrity;
-use crate::reference::{
-    expand_reference_scope, format_ref, parse_reference, ExpandedScope, Reference, ScopeLevel,
-    TagFilter,
-};
+use crate::reference::{parse_reference, resolve_references};
 use crate::util::format_size;
-use crate::walk;
-
-struct ResolvedEntry {
-    abs_path: PathBuf,
-    display_path: String,
-}
 
 pub fn run(
     cwd: &Path,
@@ -38,15 +25,15 @@ pub fn run(
     let mut total = 0usize;
 
     for raw_ref in raw_refs {
-        let reference = promote_and_parse(raw_ref)?;
-        let entries = collect_files(&reference, &ctx)?;
+        let reference = parse_reference(raw_ref)?;
+        let collection = resolve_references(&[reference], &ctx)?;
 
-        if entries.is_empty() {
+        if collection.files.is_empty() {
             continue;
         }
 
         let mut first_in_ref = true;
-        for entry in &entries {
+        for rf in &collection.files {
             if total > 0 {
                 writeln!(out)?;
             }
@@ -62,13 +49,14 @@ pub fn run(
 
             if show_path {
                 if colorize {
-                    writeln!(out, "{}", style(&entry.display_path).bold())?;
+                    writeln!(out, "{}", style(&rf.ref_string).bold())?;
                 } else {
-                    writeln!(out, "{}", entry.display_path)?;
+                    writeln!(out, "{}", rf.ref_string)?;
                 }
             }
 
-            dump_content(&mut out, &entry.abs_path, colorize)?;
+            let abs_path = resolve_abs_path(&rf.rel_path, &ctx)?;
+            dump_content(&mut out, &abs_path, colorize)?;
             total += 1;
         }
     }
@@ -80,99 +68,9 @@ pub fn run(
     Ok(())
 }
 
-fn promote_and_parse(raw_ref: &str) -> Result<Reference> {
-    if !raw_ref.starts_with(':') && !raw_ref.contains('/') {
-        parse_reference(&format!(":{raw_ref}"))
-    } else {
-        parse_reference(raw_ref)
-    }
-}
-
-fn collect_files(reference: &Reference, ctx: &Context) -> Result<Vec<ResolvedEntry>> {
-    match reference {
-        Reference::BarePath(p) => collect_bare_path(p, ctx),
-        Reference::Workspace { scope, tags, glob } | Reference::Context { scope, tags, glob } => {
-            collect_structured(scope, tags, glob.as_deref(), ctx)
-        }
-    }
-}
-
-fn collect_bare_path(path: &str, ctx: &Context) -> Result<Vec<ResolvedEntry>> {
-    let (project_root, project_db) = ctx.require_project()?;
-    let abs_path = project_root.join(path);
-    if !abs_path.exists() {
-        return Ok(vec![]);
-    }
-
-    auto_ingest(project_db, &abs_path, path)?;
-
-    Ok(vec![ResolvedEntry {
-        abs_path,
-        display_path: path.to_string(),
-    }])
-}
-
-fn collect_structured(
-    scope: &[ScopeLevel],
-    tags: &[TagFilter],
-    glob: Option<&str>,
-    ctx: &Context,
-) -> Result<Vec<ResolvedEntry>> {
-    let targets = expand_reference_scope(scope, ctx)?;
-    let glob_pattern = glob.map(glob::Pattern::new).transpose()?;
-
-    let mut entries = Vec::new();
-    for target in &targets {
-        entries.extend(collect_target(target, tags, glob_pattern.as_ref())?);
-    }
-    Ok(entries)
-}
-
-fn collect_target(
-    target: &ExpandedScope,
-    tags: &[TagFilter],
-    glob_filter: Option<&glob::Pattern>,
-) -> Result<Vec<ResolvedEntry>> {
-    let db = ProjectDb::open(&target.project_root.join(".mkrk"))?;
-    let patterns = walk::category_patterns(&db, target.category_name.as_deref())?;
-    let paths = walk::walk_and_collect(&target.project_root, &patterns)?;
-
-    let mut entries = Vec::new();
-    for rel_path in &paths {
-        if let Some(pattern) = glob_filter {
-            let file_name = Path::new(rel_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            if !pattern.matches(file_name) && !pattern.matches(rel_path.as_str()) {
-                continue;
-            }
-        }
-
-        let abs_path = target.project_root.join(rel_path);
-        let hash = auto_ingest(&db, &abs_path, rel_path)?;
-
-        if !tags.is_empty() && !matches_tags(&db, &hash, tags)? {
-            continue;
-        }
-
-        let display_path = format_ref(rel_path, target.project_name.as_deref(), &db);
-
-        entries.push(ResolvedEntry {
-            abs_path,
-            display_path,
-        });
-    }
-
-    Ok(entries)
-}
-
-fn auto_ingest(db: &ProjectDb, abs_path: &Path, rel_path: &str) -> Result<String> {
-    let hash = integrity::hash_file(abs_path)?;
-    if db.get_file_by_hash(&hash)?.is_none() {
-        let _ = track_file(db, abs_path, rel_path);
-    }
-    Ok(hash)
+fn resolve_abs_path(rel_path: &str, ctx: &Context) -> Result<std::path::PathBuf> {
+    let (project_root, _) = ctx.require_project()?;
+    Ok(project_root.join(rel_path))
 }
 
 fn dump_content(out: &mut impl Write, path: &Path, colorize: bool) -> Result<()> {
