@@ -109,8 +109,11 @@ fn resolve_workspace_project_root(name: &str, ctx: &Context) -> Result<PathBuf> 
 fn resolve_single(reference: &Reference, ctx: &Context) -> Result<Vec<ResolvedFile>> {
     match reference {
         Reference::BarePath(path) => resolve_bare_path(path, ctx),
-        Reference::Workspace { scope, tags, glob } | Reference::Context { scope, tags, glob } => {
-            resolve_structured(scope, tags, glob.as_deref(), ctx)
+        Reference::Workspace { scope, tags, glob } => {
+            resolve_structured(scope, tags, glob.as_deref(), ctx, true)
+        }
+        Reference::Context { scope, tags, glob } => {
+            resolve_structured(scope, tags, glob.as_deref(), ctx, false)
         }
     }
 }
@@ -150,8 +153,9 @@ fn resolve_structured(
     tags: &[TagFilter],
     glob: Option<&str>,
     ctx: &Context,
+    workspace_scoped: bool,
 ) -> Result<Vec<ResolvedFile>> {
-    let pairs = expand_scope(scope, ctx)?;
+    let pairs = expand_scope(scope, ctx, workspace_scoped)?;
     let mut results = Vec::new();
 
     let tag_groups: Vec<Vec<&str>> = tags
@@ -242,17 +246,32 @@ impl std::ops::Deref for OpenedDb<'_> {
     }
 }
 
-fn expand_scope<'a>(scope: &[ScopeLevel], ctx: &'a Context) -> Result<ScopeExpansion<'a>> {
+fn expand_scope<'a>(
+    scope: &[ScopeLevel],
+    ctx: &'a Context,
+    workspace_scoped: bool,
+) -> Result<ScopeExpansion<'a>> {
     match scope.len() {
-        0 => expand_zero_scope(ctx),
-        1 => expand_one_scope(scope, ctx),
+        0 => expand_zero_scope(ctx, workspace_scoped),
+        1 => expand_one_scope(scope, ctx, workspace_scoped),
         _ => expand_multi_scope(scope, ctx),
     }
 }
 
-fn expand_zero_scope(ctx: &Context) -> Result<ScopeExpansion<'_>> {
+fn expand_zero_scope(ctx: &Context, workspace_scoped: bool) -> Result<ScopeExpansion<'_>> {
     match ctx {
-        Context::Project { project_db, .. } => {
+        Context::Project {
+            project_db,
+            workspace,
+            ..
+        } => {
+            // `:` (workspace_scoped) expands to all workspace projects if available
+            if workspace_scoped {
+                if let Some(ws) = workspace {
+                    return expand_all_workspace_projects(&ws.workspace_db, &ws.workspace_root);
+                }
+            }
+            // Context ref or no workspace: current project
             Ok(vec![(None, None, OpenedDb::Borrowed(project_db))])
         }
         Context::Workspace {
@@ -264,7 +283,11 @@ fn expand_zero_scope(ctx: &Context) -> Result<ScopeExpansion<'_>> {
     }
 }
 
-fn expand_one_scope<'a>(scope: &[ScopeLevel], ctx: &'a Context) -> Result<ScopeExpansion<'a>> {
+fn expand_one_scope<'a>(
+    scope: &[ScopeLevel],
+    ctx: &'a Context,
+    workspace_scoped: bool,
+) -> Result<ScopeExpansion<'a>> {
     let level = &scope[0];
 
     match ctx {
@@ -272,42 +295,63 @@ fn expand_one_scope<'a>(scope: &[ScopeLevel], ctx: &'a Context) -> Result<ScopeE
             project_db,
             workspace,
             ..
-        } => {
-            let mut results = Vec::new();
-            for name in &level.names {
-                if is_category_in_project(project_db, name)? {
-                    results.push((None, Some(name.clone()), OpenedDb::Borrowed(project_db)));
-                } else if let Some(ws) = workspace {
-                    let db = open_project_db(&ws.workspace_db, &ws.workspace_root, name)?;
-                    results.push((Some(name.clone()), None, OpenedDb::Owned(db)));
-                } else {
-                    results.push((None, Some(name.clone()), OpenedDb::Borrowed(project_db)));
-                }
-            }
-            Ok(results)
-        }
+        } => expand_one_in_project(
+            &level.names,
+            project_db,
+            workspace.as_ref(),
+            workspace_scoped,
+        ),
         Context::Workspace {
             workspace_db,
             workspace_root,
             ..
-        } => {
-            let mut results = Vec::new();
-            for name in &level.names {
-                if workspace_db.get_project_by_name(name)?.is_some() {
-                    let db = open_project_db(workspace_db, workspace_root, name)?;
-                    results.push((Some(name.clone()), None, OpenedDb::Owned(db)));
-                } else {
-                    let found = find_category_across_projects(workspace_db, workspace_root, name)?;
-                    if found.is_empty() {
-                        bail!("'{name}' is not a project or category in any project");
-                    }
-                    results.extend(found);
-                }
-            }
-            Ok(results)
-        }
+        } => expand_one_in_workspace(&level.names, workspace_db, workspace_root, workspace_scoped),
         Context::None => bail!("not in a muckrake project or workspace"),
     }
+}
+
+fn expand_one_in_project<'a>(
+    names: &[String],
+    project_db: &'a ProjectDb,
+    workspace: Option<&crate::context::WorkspaceContext>,
+    workspace_scoped: bool,
+) -> Result<ScopeExpansion<'a>> {
+    let mut results = Vec::new();
+    for name in names {
+        if workspace_scoped {
+            if let Some(ws) = workspace {
+                let db = open_project_db(&ws.workspace_db, &ws.workspace_root, name)?;
+                results.push((Some(name.clone()), None, OpenedDb::Owned(db)));
+            } else {
+                results.push((None, Some(name.clone()), OpenedDb::Borrowed(project_db)));
+            }
+        } else {
+            results.push((None, Some(name.clone()), OpenedDb::Borrowed(project_db)));
+        }
+    }
+    Ok(results)
+}
+
+fn expand_one_in_workspace(
+    names: &[String],
+    workspace_db: &WorkspaceDb,
+    workspace_root: &std::path::Path,
+    workspace_scoped: bool,
+) -> Result<ScopeExpansion<'static>> {
+    let mut results = Vec::new();
+    for name in names {
+        if workspace_scoped {
+            let db = open_project_db(workspace_db, workspace_root, name)?;
+            results.push((Some(name.clone()), None, OpenedDb::Owned(db)));
+        } else {
+            let found = find_category_across_projects(workspace_db, workspace_root, name)?;
+            if found.is_empty() {
+                bail!("'{name}' is not a category in any project");
+            }
+            results.extend(found);
+        }
+    }
+    Ok(results)
 }
 
 fn expand_workspace_project_categories(
