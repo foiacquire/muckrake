@@ -205,4 +205,153 @@ mod tests {
             "evidence.emails.attachment"
         );
     }
+
+    // ---- Round-trip tests: format → parse → verify structure ----
+
+    use crate::reference::parse::parse_reference;
+    use crate::reference::types::{Reference, ScopeLevel};
+
+    /// Verify that a formatted reference parses back to a structured reference
+    /// with the expected scope levels and glob.
+    fn assert_round_trip(
+        path: &str,
+        project_name: Option<&str>,
+        db: &ProjectDb,
+        expected_scope: &[&str],
+        expected_glob: Option<&str>,
+    ) {
+        let formatted = format_ref(path, project_name, db);
+        let parsed = parse_reference(&formatted)
+            .unwrap_or_else(|e| panic!("failed to parse formatted ref '{formatted}': {e}"));
+
+        let (scope, glob) = match parsed {
+            Reference::Workspace { scope, glob, .. } => (scope, glob),
+            Reference::Context { scope, glob, .. } => (scope, glob),
+            Reference::BarePath(p) => {
+                panic!("expected structured ref, got BarePath({p}) from '{formatted}'")
+            }
+        };
+
+        let scope_names: Vec<&str> = scope
+            .iter()
+            .flat_map(|sl| sl.names.iter().map(String::as_str))
+            .collect();
+        assert_eq!(
+            scope_names, expected_scope,
+            "scope mismatch for '{formatted}'"
+        );
+        assert_eq!(
+            glob.as_deref(),
+            expected_glob,
+            "glob mismatch for '{formatted}'"
+        );
+    }
+
+    #[test]
+    fn round_trip_categorized_project() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_round_trip(
+            "evidence/report.pdf",
+            None,
+            &db,
+            &["evidence"],
+            Some("report.pdf"),
+        );
+    }
+
+    #[test]
+    fn round_trip_categorized_workspace() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_round_trip(
+            "evidence/report.pdf",
+            Some("acme"),
+            &db,
+            &["acme", "evidence"],
+            Some("report.pdf"),
+        );
+    }
+
+    #[test]
+    fn round_trip_subdir_workspace() {
+        let (_dir, db) = setup_db(&[("sources", "sources/**")]);
+        assert_round_trip(
+            "sources/web/2026-01-01/robots.txt",
+            Some("acme"),
+            &db,
+            &["acme", "sources", "web", "2026-01-01"],
+            Some("robots.txt"),
+        );
+    }
+
+    #[test]
+    fn round_trip_no_ext_filename() {
+        let (_dir, db) = setup_db(&[("tools", "tools/**")]);
+        assert_round_trip("tools/Makefile", None, &db, &["tools", "Makefile"], None);
+    }
+
+    #[test]
+    fn round_trip_no_ext_workspace() {
+        let (_dir, db) = setup_db(&[("tools", "tools/**")]);
+        assert_round_trip(
+            "tools/Makefile",
+            Some("acme"),
+            &db,
+            &["acme", "tools", "Makefile"],
+            None,
+        );
+    }
+
+    #[test]
+    fn round_trip_uncategorized_workspace() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_round_trip(
+            "readme.txt",
+            Some("acme"),
+            &db,
+            &["acme"],
+            Some("readme.txt"),
+        );
+    }
+
+    #[test]
+    fn round_trip_uncategorized_no_ext_workspace() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_round_trip("Makefile", Some("acme"), &db, &["acme", "Makefile"], None);
+    }
+
+    #[test]
+    fn round_trip_uncategorized_subdir_workspace() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_round_trip(
+            "misc/notes/readme.txt",
+            Some("acme"),
+            &db,
+            &["acme", "misc", "notes"],
+            Some("readme.txt"),
+        );
+    }
+
+    #[test]
+    fn round_trip_deep_subdir_no_ext() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_round_trip(
+            "evidence/emails/attachment",
+            None,
+            &db,
+            &["evidence", "emails", "attachment"],
+            None,
+        );
+    }
+
+    #[test]
+    fn round_trip_nested_pattern() {
+        let (_dir, db) = setup_db(&[("evidence", "sources/evidence/**")]);
+        assert_round_trip(
+            "sources/evidence/emails/msg.eml",
+            Some("acme"),
+            &db,
+            &["acme", "evidence", "emails"],
+            Some("msg.eml"),
+        );
+    }
 }
