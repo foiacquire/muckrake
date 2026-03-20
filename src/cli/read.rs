@@ -91,7 +91,7 @@ fn promote_and_parse(raw_ref: &str) -> Result<Reference> {
 fn collect_files(reference: &Reference, ctx: &Context) -> Result<Vec<ResolvedEntry>> {
     match reference {
         Reference::BarePath(p) => collect_bare_path(p, ctx),
-        Reference::Structured { scope, tags, glob } => {
+        Reference::Workspace { scope, tags, glob } | Reference::Context { scope, tags, glob } => {
             collect_structured(scope, tags, glob.as_deref(), ctx)
         }
     }

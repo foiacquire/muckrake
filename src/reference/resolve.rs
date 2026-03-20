@@ -127,7 +127,7 @@ fn resolve_workspace_project_root(name: &str, ctx: &Context) -> Result<PathBuf> 
 fn resolve_single(reference: &Reference, ctx: &Context) -> Result<Vec<ResolvedFile>> {
     match reference {
         Reference::BarePath(path) => resolve_bare_path(path, ctx),
-        Reference::Structured { scope, tags, glob } => {
+        Reference::Workspace { scope, tags, glob } | Reference::Context { scope, tags, glob } => {
             resolve_structured(scope, tags, glob.as_deref(), ctx)
         }
     }
@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bare_name_returns_empty() {
+    fn resolve_bare_path_returns_empty() {
         let dir = TempDir::new().unwrap();
         let db = setup_project(dir.path());
         let hash = create_disk_file(dir.path(), "evidence/report.pdf");
@@ -613,8 +613,8 @@ mod tests {
             .unwrap();
 
         let ctx = make_project_ctx(dir.path());
-        // Bare name without valid path — no file at project_root/report.pdf
-        let coll = resolve_one("report.pdf", &ctx);
+        // Bare path with / — no file at project_root/nonexistent/file.txt
+        let coll = resolve_one("nonexistent/file.txt", &ctx);
         assert!(coll.files.is_empty());
     }
 

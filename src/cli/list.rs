@@ -30,32 +30,20 @@ pub fn run(cwd: &Path, raw_refs: &[String], _no_hash_check: bool) -> Result<()> 
 
 fn build_refs(raw_refs: &[String]) -> Result<Vec<Reference>> {
     if raw_refs.is_empty() {
-        return Ok(vec![Reference::Structured {
+        return Ok(vec![Reference::Context {
             scope: vec![],
             tags: vec![],
             glob: None,
         }]);
     }
 
-    raw_refs
-        .iter()
-        .map(|r| {
-            // Bare words without path separators are category/project names,
-            // not file lookups. Promote to structured references so they
-            // resolve correctly from both project and workspace context.
-            if !r.starts_with(':') && !r.contains('/') {
-                parse_reference(&format!(":{r}"))
-            } else {
-                parse_reference(r)
-            }
-        })
-        .collect()
+    raw_refs.iter().map(|r| parse_reference(r)).collect()
 }
 
 fn list_reference(reference: &Reference, ctx: &Context) -> Result<bool> {
     match reference {
         Reference::BarePath(path) => list_bare_path(path, ctx),
-        Reference::Structured { scope, tags, glob } => {
+        Reference::Workspace { scope, tags, glob } | Reference::Context { scope, tags, glob } => {
             list_structured(scope, tags, glob.as_deref(), ctx)
         }
     }

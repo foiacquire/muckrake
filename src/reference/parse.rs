@@ -25,11 +25,21 @@ pub fn is_reserved_name(name: &str) -> bool {
 }
 
 pub fn parse_reference(input: &str) -> Result<Reference> {
-    if !input.starts_with(':') {
+    if let Some(rest) = input.strip_prefix(':') {
+        return parse_structured(input, rest, true);
+    }
+
+    // ./ or ../ prefixed paths are explicit filesystem paths
+    if input.starts_with("./") || input.starts_with("../") {
         return Ok(Reference::BarePath(input.to_string()));
     }
 
-    let rest = &input[1..];
+    // Everything else is a context ref — bare names, dotted scopes,
+    // and scope/glob patterns all parse as structured references.
+    parse_structured(input, input, false)
+}
+
+fn parse_structured(original: &str, rest: &str, workspace: bool) -> Result<Reference> {
     let mut pos = 0;
     let bytes = rest.as_bytes();
 
@@ -39,13 +49,17 @@ pub fn parse_reference(input: &str) -> Result<Reference> {
 
     if pos < bytes.len() {
         bail!(
-            "unexpected character '{}' at position {} in reference '{input}'",
+            "unexpected character '{}' at position {} in reference '{original}'",
             bytes[pos] as char,
             pos + 1
         );
     }
 
-    Ok(Reference::Structured { scope, tags, glob })
+    if workspace {
+        Ok(Reference::Workspace { scope, tags, glob })
+    } else {
+        Ok(Reference::Context { scope, tags, glob })
+    }
 }
 
 fn parse_scope(input: &str, pos: &mut usize) -> Result<Vec<ScopeLevel>> {
@@ -174,9 +188,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_bare_path() {
+    fn parse_context_with_slash() {
         let r = parse_reference("evidence/report.pdf").unwrap();
-        assert_eq!(r, Reference::BarePath("evidence/report.pdf".to_string()));
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![ScopeLevel {
+                    names: vec!["evidence".to_string()]
+                }],
+                tags: vec![],
+                glob: Some("report.pdf".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_bare_path_dot_slash() {
+        let r = parse_reference("./manual_file.pdf").unwrap();
+        assert_eq!(r, Reference::BarePath("./manual_file.pdf".to_string()));
+    }
+
+    #[test]
+    fn parse_bare_path_parent() {
+        let r = parse_reference("../other/file.txt").unwrap();
+        assert_eq!(r, Reference::BarePath("../other/file.txt".to_string()));
     }
 
     #[test]
@@ -184,7 +219,7 @@ mod tests {
         let r = parse_reference(":evidence").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["evidence".to_string()]
                 }],
@@ -199,7 +234,7 @@ mod tests {
         let r = parse_reference(":bailey.evidence").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![
                     ScopeLevel {
                         names: vec!["bailey".to_string()]
@@ -219,7 +254,7 @@ mod tests {
         let r = parse_reference(":{bailey,george}.evidence").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![
                     ScopeLevel {
                         names: vec!["bailey".to_string(), "george".to_string()]
@@ -239,7 +274,7 @@ mod tests {
         let r = parse_reference(":{bailey,george}.{sources,evidence}").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![
                     ScopeLevel {
                         names: vec!["bailey".to_string(), "george".to_string()]
@@ -259,7 +294,7 @@ mod tests {
         let r = parse_reference(":george!bailey!classified").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["george".to_string()]
                 }],
@@ -281,7 +316,7 @@ mod tests {
         let r = parse_reference(":george!bailey,classified").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["george".to_string()]
                 }],
@@ -298,7 +333,7 @@ mod tests {
         let r = parse_reference(":george!bailey,classified!priority").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["george".to_string()]
                 }],
@@ -320,7 +355,7 @@ mod tests {
         let r = parse_reference(":evidence/*.pdf").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["evidence".to_string()]
                 }],
@@ -335,7 +370,7 @@ mod tests {
         let r = parse_reference(":{bailey,george}.evidence!classified/*.pdf").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![
                     ScopeLevel {
                         names: vec!["bailey".to_string(), "george".to_string()]
@@ -357,7 +392,7 @@ mod tests {
         let r = parse_reference(":").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![],
                 tags: vec![],
                 glob: None,
@@ -370,7 +405,7 @@ mod tests {
         let r = parse_reference(":.sources").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["sources".to_string()]
                 }],
@@ -416,7 +451,7 @@ mod tests {
         let r = parse_reference(":evidence/*_{response,request}.md").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["evidence".to_string()]
                 }],
@@ -431,7 +466,7 @@ mod tests {
         let r = parse_reference(":evidence!classified/*.pdf").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["evidence".to_string()]
                 }],
@@ -448,7 +483,7 @@ mod tests {
         let r = parse_reference(":!classified").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![],
                 tags: vec![TagFilter {
                     tags: vec!["classified".to_string()]
@@ -463,7 +498,7 @@ mod tests {
         let r = parse_reference(":/*.pdf").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![],
                 tags: vec![],
                 glob: Some("*.pdf".to_string()),
@@ -476,7 +511,7 @@ mod tests {
         let r = parse_reference(":bailey").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["bailey".to_string()]
                 }],
@@ -491,12 +526,109 @@ mod tests {
         let r = parse_reference(":{bailey,george}").unwrap();
         assert_eq!(
             r,
-            Reference::Structured {
+            Reference::Workspace {
                 scope: vec![ScopeLevel {
                     names: vec!["bailey".to_string(), "george".to_string()]
                 }],
                 tags: vec![],
                 glob: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_context_bare_name() {
+        let r = parse_reference("sources").unwrap();
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![ScopeLevel {
+                    names: vec!["sources".to_string()]
+                }],
+                tags: vec![],
+                glob: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_context_dotted() {
+        let r = parse_reference(".evidence").unwrap();
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![ScopeLevel {
+                    names: vec!["evidence".to_string()]
+                }],
+                tags: vec![],
+                glob: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_context_dotted_subdir() {
+        let r = parse_reference(".evidence.emails").unwrap();
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![
+                    ScopeLevel {
+                        names: vec!["evidence".to_string()]
+                    },
+                    ScopeLevel {
+                        names: vec!["emails".to_string()]
+                    },
+                ],
+                tags: vec![],
+                glob: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_context_with_glob() {
+        let r = parse_reference("evidence/*.pdf").unwrap();
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![ScopeLevel {
+                    names: vec!["evidence".to_string()]
+                }],
+                tags: vec![],
+                glob: Some("*.pdf".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_context_with_tags() {
+        let r = parse_reference("evidence!classified").unwrap();
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![ScopeLevel {
+                    names: vec!["evidence".to_string()]
+                }],
+                tags: vec![TagFilter {
+                    tags: vec!["classified".to_string()]
+                }],
+                glob: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_context_scope_with_deep_glob() {
+        let r = parse_reference("some/path/file.txt").unwrap();
+        assert_eq!(
+            r,
+            Reference::Context {
+                scope: vec![ScopeLevel {
+                    names: vec!["some".to_string()]
+                }],
+                tags: vec![],
+                glob: Some("path/file.txt".to_string()),
             }
         );
     }
