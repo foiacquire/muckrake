@@ -1,48 +1,76 @@
 use crate::db::ProjectDb;
 use crate::models::Category;
 
-/// Format a file path as a valid reference string relative to the current context.
+/// Format a file path as a canonical reference string.
 ///
-/// Looks up the matching category to map the filesystem path to a
-/// category-relative reference. Subdirectories within the category become
-/// `.`-separated scope levels; only the filename follows `/`.
+/// Converts a filesystem-relative path into the reference syntax defined by the
+/// spec. Scope levels use `.` separators; `/` precedes the filename only when
+/// the filename contains `.` (to avoid ambiguity with scope levels).
 ///
-/// For example, `sources/web/2026-01-01/robots.txt` with category "sources"
-/// (pattern `sources/**`) becomes `sources.web.2026-01-01/robots.txt`.
+/// With workspace context (project name provided), the reference is prefixed
+/// with `:projectname.`. Without workspace context, scope starts directly.
 ///
-/// From workspace context, the project name is prepended:
-/// `:anthropic.sources.web.2026-01-01/robots.txt`.
+/// Examples (project `acme`, category `sources` pattern `sources/**`):
+///   `sources/web/data/robots.txt` → `:acme.sources.web.data/robots.txt`
+///   `sources/Makefile`            → `:acme.sources.Makefile`
+///   `README.md` (uncategorized)   → `:acme/README.md`
 pub fn format_ref(path: &str, project_name: Option<&str>, db: &ProjectDb) -> String {
     let category = db.match_category(path).ok().flatten();
 
-    match category {
-        Some(cat) => {
-            let base = Category::name_from_pattern(&cat.pattern);
-            let relative = path
-                .strip_prefix(&base)
-                .and_then(|s| s.strip_prefix('/'))
-                .unwrap_or(path);
-
-            let (dir_prefix, filename) = match relative.rfind('/') {
-                Some(pos) => {
-                    let dotted = relative[..pos].replace('/', ".");
-                    (format!(".{dotted}"), &relative[pos + 1..])
-                }
-                None => (String::new(), relative),
-            };
-            let sep = if filename.contains('.') { "/" } else { "." };
-
-            match project_name {
-                Some(project) => {
-                    format!(":{project}.{}{dir_prefix}{sep}{filename}", cat.name)
-                }
-                None => format!("{}{dir_prefix}{sep}{filename}", cat.name),
-            }
+    if let Some(ref cat) = category {
+        let base = Category::name_from_pattern(&cat.pattern);
+        let relative = path
+            .strip_prefix(&base)
+            .and_then(|s| s.strip_prefix('/'))
+            .unwrap_or(path);
+        let body = format_scoped(&cat.name, relative);
+        match project_name {
+            Some(project) => format!(":{project}.{body}"),
+            None => body,
         }
-        None => match project_name {
-            Some(project) => format!(":{project}/{path}"),
-            None => path.to_string(),
-        },
+    } else {
+        let (dir_prefix, filename) = split_dirs_and_filename(path);
+        let sep = filename_separator(filename);
+        match (project_name, dir_prefix) {
+            (Some(project), Some(dotted)) => {
+                format!(":{project}.{dotted}{sep}{filename}")
+            }
+            (Some(project), None) => format!(":{project}{sep}{filename}"),
+            (None, Some(dotted)) => format!("{dotted}{sep}{filename}"),
+            (None, None) => path.to_string(),
+        }
+    }
+}
+
+/// Format a path within a known category scope.
+/// `category` is the scope name, `relative` is the path within that category.
+fn format_scoped(category: &str, relative: &str) -> String {
+    let (dir_prefix, filename) = split_dirs_and_filename(relative);
+    let sep = filename_separator(filename);
+
+    match dir_prefix {
+        Some(dotted) => format!("{category}.{dotted}{sep}{filename}"),
+        None => format!("{category}{sep}{filename}"),
+    }
+}
+
+/// Split a relative path into dotted directory prefix and filename.
+fn split_dirs_and_filename(rel_path: &str) -> (Option<String>, &str) {
+    match rel_path.rfind('/') {
+        Some(pos) => {
+            let dotted = rel_path[..pos].replace('/', ".");
+            (Some(dotted), &rel_path[pos + 1..])
+        }
+        None => (None, rel_path),
+    }
+}
+
+/// Choose `/` or `.` before the filename based on whether it contains `.`.
+fn filename_separator(filename: &str) -> &'static str {
+    if filename.contains('.') {
+        "/"
+    } else {
+        "."
     }
 }
 
@@ -124,6 +152,24 @@ mod tests {
         assert_eq!(
             format_ref("readme.txt", Some("myproject"), &db),
             ":myproject/readme.txt"
+        );
+    }
+
+    #[test]
+    fn uncategorized_file_no_ext() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_eq!(
+            format_ref("Makefile", Some("myproject"), &db),
+            ":myproject.Makefile"
+        );
+    }
+
+    #[test]
+    fn uncategorized_subdir_workspace() {
+        let (_dir, db) = setup_db(&[("evidence", "evidence/**")]);
+        assert_eq!(
+            format_ref("misc/notes/readme.txt", Some("myproject"), &db),
+            ":myproject.misc.notes/readme.txt"
         );
     }
 
