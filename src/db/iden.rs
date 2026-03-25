@@ -1,6 +1,39 @@
 use sea_query::Iden;
 
 #[derive(Iden)]
+pub enum Scopes {
+    Table,
+    Id,
+    Name,
+    ScopeType,
+    Pattern,
+    CategoryType,
+    Description,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+pub enum ScopePolicy {
+    Table,
+    Id,
+    ScopeId,
+    ProtectionLevel,
+}
+
+#[derive(Iden)]
+pub enum ScopeToolConfig {
+    Table,
+    Id,
+    ScopeId,
+    Action,
+    FileType,
+    Command,
+    Env,
+    Quiet,
+}
+
+// Legacy — kept for migration only
+#[derive(Iden)]
 pub enum Categories {
     Table,
     Id,
