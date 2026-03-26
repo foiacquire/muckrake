@@ -27,30 +27,6 @@ CREATE TABLE IF NOT EXISTS scope_tool_config (
 );
 ";
 
-// Legacy — used for migration from old schema
-const TOOL_TABLES_SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS tool_config (
-    id INTEGER PRIMARY KEY,
-    scope TEXT,
-    action TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    command TEXT NOT NULL,
-    env TEXT,
-    quiet INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS tag_tool_config (
-    id INTEGER PRIMARY KEY,
-    tag TEXT NOT NULL,
-    action TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    command TEXT NOT NULL,
-    env TEXT,
-    quiet INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(tag, action, file_type)
-);
-";
-
 pub const PROJECT_SCHEMA_PREFIX: &str = "
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
@@ -161,29 +137,6 @@ CREATE TABLE IF NOT EXISTS workspace_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    path TEXT NOT NULL,
-    description TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS default_categories (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL DEFAULT '',
-    pattern TEXT NOT NULL UNIQUE,
-    category_type TEXT NOT NULL DEFAULT 'files',
-    description TEXT
-);
-
-CREATE TABLE IF NOT EXISTS default_category_policy (
-    id INTEGER PRIMARY KEY,
-    default_category_id INTEGER NOT NULL REFERENCES default_categories(id),
-    protection_level TEXT NOT NULL DEFAULT 'editable',
-    UNIQUE(default_category_id)
-);
 ";
 
 const DEFAULT_PIPELINES_SCHEMA: &str = "
@@ -213,5 +166,5 @@ pub static PROJECT_SCHEMA: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub static WORKSPACE_SCHEMA: LazyLock<String> = LazyLock::new(|| {
-    format!("{WORKSPACE_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{SCOPE_TABLES_SCHEMA}{DEFAULT_PIPELINES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
+    format!("{WORKSPACE_SCHEMA_PREFIX}{SCOPE_TABLES_SCHEMA}{DEFAULT_PIPELINES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
 });

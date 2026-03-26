@@ -15,10 +15,7 @@ use crate::models::{
     ProtectionLevel, Rule, Scope, ScopeType, Sign, TrackedFile, TriggerEvent, TriggerFilter,
 };
 
-use super::iden::{
-    AuditLog, FileTags, Files, Rules, ScopePolicy, ScopeToolConfig, Scopes, TagToolConfig,
-    ToolConfig,
-};
+use super::iden::{AuditLog, FileTags, Files, Rules, ScopePolicy, ScopeToolConfig, Scopes};
 use super::schema::PROJECT_SCHEMA;
 
 pub struct ProjectDb {
@@ -1305,53 +1302,6 @@ pub struct TagToolConfigParams<'a> {
     pub command: &'a str,
     pub env: Option<&'a str>,
     pub quiet: bool,
-}
-
-// Legacy — used by workspace.rs which still queries old tool tables
-pub(crate) const TOOL_CONFIG_COLUMNS: [ToolConfig; 7] = [
-    ToolConfig::Id,
-    ToolConfig::Scope,
-    ToolConfig::Action,
-    ToolConfig::FileType,
-    ToolConfig::Command,
-    ToolConfig::Env,
-    ToolConfig::Quiet,
-];
-
-pub(crate) const TAG_TOOL_CONFIG_COLUMNS: [TagToolConfig; 7] = [
-    TagToolConfig::Id,
-    TagToolConfig::Tag,
-    TagToolConfig::Action,
-    TagToolConfig::FileType,
-    TagToolConfig::Command,
-    TagToolConfig::Env,
-    TagToolConfig::Quiet,
-];
-
-pub(crate) fn legacy_row_to_tool_config(row: &rusqlite::Row) -> rusqlite::Result<ToolConfigRow> {
-    Ok(ToolConfigRow {
-        id: row.get(0)?,
-        scope: row.get(1)?,
-        action: row.get(2)?,
-        file_type: row.get(3)?,
-        command: row.get(4)?,
-        env: row.get(5)?,
-        quiet: row.get::<_, i32>(6)? != 0,
-    })
-}
-
-pub(crate) fn legacy_row_to_tag_tool_config(
-    row: &rusqlite::Row,
-) -> rusqlite::Result<TagToolConfigRow> {
-    Ok(TagToolConfigRow {
-        id: row.get(0)?,
-        tag: row.get(1)?,
-        action: row.get(2)?,
-        file_type: row.get(3)?,
-        command: row.get(4)?,
-        env: row.get(5)?,
-        quiet: row.get::<_, i32>(6)? != 0,
-    })
 }
 
 const SCOPE_TOOL_CONFIG_COLUMNS: [ScopeToolConfig; 7] = [

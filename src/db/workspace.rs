@@ -9,16 +9,23 @@ use sea_query::{
 };
 use sea_query_rusqlite::RusqliteBinder;
 
-use crate::models::{Category, Pipeline, ProtectionLevel};
+use crate::models::{Category, ProtectionLevel, Scope};
 use crate::reference::validate_name;
 
-use super::iden::{
-    DefaultCategories, DefaultCategoryPolicy, Projects, TagToolConfig, ToolConfig, WorkspaceConfig,
-};
+use super::iden::{ScopePolicy, ScopeToolConfig, Scopes, WorkspaceConfig};
 use super::schema::WORKSPACE_SCHEMA;
 
 pub struct WorkspaceDb {
     conn: Connection,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectRow {
+    pub id: i64,
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+    pub created_at: String,
 }
 
 impl WorkspaceDb {
@@ -82,15 +89,17 @@ impl WorkspaceDb {
         validate_name(name)?;
         let now = Utc::now().to_rfc3339();
         let (sql, values) = Query::insert()
-            .into_table(Projects::Table)
+            .into_table(Scopes::Table)
             .columns([
-                Projects::Name,
-                Projects::Path,
-                Projects::Description,
-                Projects::CreatedAt,
+                Scopes::Name,
+                Scopes::ScopeType,
+                Scopes::Pattern,
+                Scopes::Description,
+                Scopes::CreatedAt,
             ])
             .values_panic([
                 name.into(),
+                "project".into(),
                 path.into(),
                 description.map(String::from).into(),
                 now.into(),
@@ -102,9 +111,10 @@ impl WorkspaceDb {
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>> {
         let (sql, values) = Query::select()
-            .columns(PROJECT_COLUMNS)
-            .from(Projects::Table)
-            .order_by(Projects::Name, Order::Asc)
+            .columns(SCOPE_COLUMNS)
+            .from(Scopes::Table)
+            .and_where(Expr::col(Scopes::ScopeType).eq("project"))
+            .order_by(Scopes::Name, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(&*values.as_params(), row_to_project)?;
@@ -113,9 +123,10 @@ impl WorkspaceDb {
 
     pub fn get_project_by_name(&self, name: &str) -> Result<Option<ProjectRow>> {
         let (sql, values) = Query::select()
-            .columns(PROJECT_COLUMNS)
-            .from(Projects::Table)
-            .and_where(Expr::col(Projects::Name).eq(name))
+            .columns(SCOPE_COLUMNS)
+            .from(Scopes::Table)
+            .and_where(Expr::col(Scopes::ScopeType).eq("project"))
+            .and_where(Expr::col(Scopes::Name).eq(name))
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(&*values.as_params(), row_to_project)?;
@@ -126,19 +137,26 @@ impl WorkspaceDb {
     }
 
     pub fn insert_default_category(&self, cat: &Category) -> Result<i64> {
+        let scope: Scope = cat.into();
         let (sql, values) = Query::insert()
-            .into_table(DefaultCategories::Table)
+            .into_table(Scopes::Table)
             .columns([
-                DefaultCategories::Name,
-                DefaultCategories::Pattern,
-                DefaultCategories::CategoryType,
-                DefaultCategories::Description,
+                Scopes::Name,
+                Scopes::ScopeType,
+                Scopes::Pattern,
+                Scopes::CategoryType,
+                Scopes::Description,
             ])
             .values_panic([
-                cat.name.as_str().into(),
-                cat.pattern.as_str().into(),
-                cat.category_type.to_string().into(),
-                cat.description.clone().into(),
+                scope.name.as_str().into(),
+                "category".into(),
+                scope.pattern.clone().into(),
+                scope
+                    .category_type
+                    .map(|ct| ct.to_string())
+                    .unwrap_or_default()
+                    .into(),
+                scope.description.clone().into(),
             ])
             .build_rusqlite(SqliteQueryBuilder);
         self.conn.execute(&sql, &*values.as_params())?;
@@ -147,33 +165,14 @@ impl WorkspaceDb {
 
     pub fn list_default_categories(&self) -> Result<Vec<Category>> {
         let (sql, values) = Query::select()
-            .columns([
-                DefaultCategories::Id,
-                DefaultCategories::Name,
-                DefaultCategories::Pattern,
-                DefaultCategories::CategoryType,
-                DefaultCategories::Description,
-            ])
-            .from(DefaultCategories::Table)
+            .columns(SCOPE_COLUMNS)
+            .from(Scopes::Table)
+            .and_where(Expr::col(Scopes::ScopeType).eq("category"))
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(&*values.as_params(), |row| {
-            Ok(Category {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                pattern: row.get(2)?,
-                category_type: row.get::<_, String>(3)?.parse().map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("{e}"),
-                        )),
-                    )
-                })?,
-                description: row.get(4)?,
-            })
+            let scope = row_to_scope(row)?;
+            Ok(Category::from(scope))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -184,15 +183,12 @@ impl WorkspaceDb {
         level: &ProtectionLevel,
     ) -> Result<()> {
         let (sql, values) = Query::insert()
-            .into_table(DefaultCategoryPolicy::Table)
-            .columns([
-                DefaultCategoryPolicy::DefaultCategoryId,
-                DefaultCategoryPolicy::ProtectionLevel,
-            ])
+            .into_table(ScopePolicy::Table)
+            .columns([ScopePolicy::ScopeId, ScopePolicy::ProtectionLevel])
             .values_panic([default_category_id.into(), level.to_string().into()])
             .on_conflict(
-                OnConflict::column(DefaultCategoryPolicy::DefaultCategoryId)
-                    .update_column(DefaultCategoryPolicy::ProtectionLevel)
+                OnConflict::column(ScopePolicy::ScopeId)
+                    .update_column(ScopePolicy::ProtectionLevel)
                     .to_owned(),
             )
             .build_rusqlite(SqliteQueryBuilder);
@@ -205,9 +201,9 @@ impl WorkspaceDb {
         default_category_id: i64,
     ) -> Result<Option<ProtectionLevel>> {
         let (sql, values) = Query::select()
-            .column(DefaultCategoryPolicy::ProtectionLevel)
-            .from(DefaultCategoryPolicy::Table)
-            .and_where(Expr::col(DefaultCategoryPolicy::DefaultCategoryId).eq(default_category_id))
+            .column(ScopePolicy::ProtectionLevel)
+            .from(ScopePolicy::Table)
+            .and_where(Expr::col(ScopePolicy::ScopeId).eq(default_category_id))
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(&*values.as_params(), |row| row.get::<_, String>(0))?;
@@ -215,9 +211,7 @@ impl WorkspaceDb {
             Some(row) => {
                 let s = row?;
                 let level = s.parse().map_err(|e| {
-                    anyhow::anyhow!(
-                        "invalid protection level '{s}' in default_category_policy: {e}"
-                    )
+                    anyhow::anyhow!("invalid protection level '{s}' in scope_policy: {e}")
                 })?;
                 Ok(Some(level))
             }
@@ -245,7 +239,8 @@ impl WorkspaceDb {
     pub fn project_count(&self) -> Result<i64> {
         let (sql, values) = Query::select()
             .expr(Func::count(Expr::col(Asterisk)))
-            .from(Projects::Table)
+            .from(Scopes::Table)
+            .and_where(Expr::col(Scopes::ScopeType).eq("project"))
             .build_rusqlite(SqliteQueryBuilder);
         Ok(self
             .conn
@@ -259,32 +254,42 @@ impl WorkspaceDb {
         file_type: &str,
     ) -> Result<Option<super::project::ToolConfigRow>> {
         let (sql, values) = Query::select()
-            .columns(super::project::TOOL_CONFIG_COLUMNS)
-            .from(ToolConfig::Table)
+            .columns(SCOPE_TOOL_CONFIG_COLUMNS)
+            .from(ScopeToolConfig::Table)
             .cond_where(
                 Cond::all()
                     .add(
                         Cond::any()
-                            .add(Expr::col(ToolConfig::Scope).eq(scope.map(String::from)))
-                            .add(Expr::col(ToolConfig::Scope).is_null()),
+                            .add(
+                                Expr::col(ScopeToolConfig::ScopeId).in_subquery(
+                                    Query::select()
+                                        .column(Scopes::Id)
+                                        .from(Scopes::Table)
+                                        .and_where(
+                                            Expr::col(Scopes::Name).eq(scope.map(String::from)),
+                                        )
+                                        .to_owned(),
+                                ),
+                            )
+                            .add(Expr::col(ScopeToolConfig::ScopeId).is_null()),
                     )
-                    .add(Expr::col(ToolConfig::Action).eq(action))
+                    .add(Expr::col(ScopeToolConfig::Action).eq(action))
                     .add(
                         Cond::any()
-                            .add(Expr::col(ToolConfig::FileType).eq(file_type))
-                            .add(Expr::col(ToolConfig::FileType).eq("*")),
+                            .add(Expr::col(ScopeToolConfig::FileType).eq(file_type))
+                            .add(Expr::col(ScopeToolConfig::FileType).eq("*")),
                     ),
             )
             .order_by_expr(
                 CaseStatement::new()
-                    .case(Expr::col(ToolConfig::Scope).is_not_null(), 0)
+                    .case(Expr::col(ScopeToolConfig::ScopeId).is_not_null(), 0)
                     .finally(1)
                     .into(),
                 Order::Asc,
             )
             .order_by_expr(
                 CaseStatement::new()
-                    .case(Expr::col(ToolConfig::FileType).eq("*"), 1)
+                    .case(Expr::col(ScopeToolConfig::FileType).eq("*"), 1)
                     .finally(0)
                     .into(),
                 Order::Asc,
@@ -292,10 +297,7 @@ impl WorkspaceDb {
             .limit(1)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(
-            &*values.as_params(),
-            super::project::legacy_row_to_tool_config,
-        )?;
+        let mut rows = stmt.query_map(&*values.as_params(), row_to_tool_config)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -313,38 +315,48 @@ impl WorkspaceDb {
         }
         let tag_values: Vec<sea_query::Value> = tags.iter().map(|t| t.as_str().into()).collect();
         let (sql, values) = Query::select()
-            .columns(super::project::TAG_TOOL_CONFIG_COLUMNS)
-            .from(TagToolConfig::Table)
-            .and_where(Expr::col(TagToolConfig::Tag).is_in(tag_values))
-            .and_where(Expr::col(TagToolConfig::Action).eq(action))
+            .columns(SCOPE_TOOL_CONFIG_COLUMNS)
+            .from(ScopeToolConfig::Table)
+            .and_where(
+                Expr::col(ScopeToolConfig::ScopeId).in_subquery(
+                    Query::select()
+                        .column(Scopes::Id)
+                        .from(Scopes::Table)
+                        .and_where(Expr::col(Scopes::ScopeType).eq("tag"))
+                        .and_where(Expr::col(Scopes::Name).is_in(tag_values))
+                        .to_owned(),
+                ),
+            )
+            .and_where(Expr::col(ScopeToolConfig::Action).eq(action))
             .cond_where(
                 Cond::any()
-                    .add(Expr::col(TagToolConfig::FileType).eq(file_type))
-                    .add(Expr::col(TagToolConfig::FileType).eq("*")),
+                    .add(Expr::col(ScopeToolConfig::FileType).eq(file_type))
+                    .add(Expr::col(ScopeToolConfig::FileType).eq("*")),
             )
-            .order_by(TagToolConfig::Tag, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            &*values.as_params(),
-            super::project::legacy_row_to_tag_tool_config,
-        )?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_tag_tool_config)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn insert_tool_config(&self, params: &super::project::ToolConfigParams<'_>) -> Result<i64> {
+        let scope_id: Option<i64> = if let Some(scope_name) = params.scope {
+            self.get_scope_id_by_name(scope_name)?
+        } else {
+            None
+        };
         let (sql, values) = Query::insert()
-            .into_table(ToolConfig::Table)
+            .into_table(ScopeToolConfig::Table)
             .columns([
-                ToolConfig::Scope,
-                ToolConfig::Action,
-                ToolConfig::FileType,
-                ToolConfig::Command,
-                ToolConfig::Env,
-                ToolConfig::Quiet,
+                ScopeToolConfig::ScopeId,
+                ScopeToolConfig::Action,
+                ScopeToolConfig::FileType,
+                ScopeToolConfig::Command,
+                ScopeToolConfig::Env,
+                ScopeToolConfig::Quiet,
             ])
             .values_panic([
-                params.scope.map(String::from).into(),
+                scope_id.into(),
                 params.action.into(),
                 params.file_type.into(),
                 params.command.into(),
@@ -360,18 +372,19 @@ impl WorkspaceDb {
         &self,
         params: &super::project::TagToolConfigParams<'_>,
     ) -> Result<i64> {
+        let scope_id = self.get_or_create_tag_scope(params.tag)?;
         let (sql, values) = Query::insert()
-            .into_table(TagToolConfig::Table)
+            .into_table(ScopeToolConfig::Table)
             .columns([
-                TagToolConfig::Tag,
-                TagToolConfig::Action,
-                TagToolConfig::FileType,
-                TagToolConfig::Command,
-                TagToolConfig::Env,
-                TagToolConfig::Quiet,
+                ScopeToolConfig::ScopeId,
+                ScopeToolConfig::Action,
+                ScopeToolConfig::FileType,
+                ScopeToolConfig::Command,
+                ScopeToolConfig::Env,
+                ScopeToolConfig::Quiet,
             ])
             .values_panic([
-                params.tag.into(),
+                scope_id.into(),
                 params.action.into(),
                 params.file_type.into(),
                 params.command.into(),
@@ -385,29 +398,31 @@ impl WorkspaceDb {
 
     pub fn list_tool_configs(&self) -> Result<Vec<super::project::ToolConfigRow>> {
         let (sql, values) = Query::select()
-            .columns(super::project::TOOL_CONFIG_COLUMNS)
-            .from(ToolConfig::Table)
-            .order_by(ToolConfig::Action, Order::Asc)
+            .columns(SCOPE_TOOL_CONFIG_COLUMNS)
+            .from(ScopeToolConfig::Table)
+            .order_by(ScopeToolConfig::Action, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            &*values.as_params(),
-            super::project::legacy_row_to_tool_config,
-        )?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_tool_config)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn list_tag_tool_configs(&self) -> Result<Vec<super::project::TagToolConfigRow>> {
         let (sql, values) = Query::select()
-            .columns(super::project::TAG_TOOL_CONFIG_COLUMNS)
-            .from(TagToolConfig::Table)
-            .order_by(TagToolConfig::Tag, Order::Asc)
+            .columns(SCOPE_TOOL_CONFIG_COLUMNS)
+            .from(ScopeToolConfig::Table)
+            .and_where(
+                Expr::col(ScopeToolConfig::ScopeId).in_subquery(
+                    Query::select()
+                        .column(Scopes::Id)
+                        .from(Scopes::Table)
+                        .and_where(Expr::col(Scopes::ScopeType).eq("tag"))
+                        .to_owned(),
+                ),
+            )
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(
-            &*values.as_params(),
-            super::project::legacy_row_to_tag_tool_config,
-        )?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_tag_tool_config)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -419,18 +434,26 @@ impl WorkspaceDb {
     ) -> Result<u64> {
         let mut query = Query::delete();
         query
-            .from_table(ToolConfig::Table)
-            .and_where(Expr::col(ToolConfig::Action).eq(action));
+            .from_table(ScopeToolConfig::Table)
+            .and_where(Expr::col(ScopeToolConfig::Action).eq(action));
         match scope {
             Some(s) => {
-                query.and_where(Expr::col(ToolConfig::Scope).eq(s));
+                query.and_where(
+                    Expr::col(ScopeToolConfig::ScopeId).in_subquery(
+                        Query::select()
+                            .column(Scopes::Id)
+                            .from(Scopes::Table)
+                            .and_where(Expr::col(Scopes::Name).eq(s))
+                            .to_owned(),
+                    ),
+                );
             }
             None => {
-                query.and_where(Expr::col(ToolConfig::Scope).is_null());
+                query.and_where(Expr::col(ScopeToolConfig::ScopeId).is_null());
             }
         }
         if let Some(ft) = file_type {
-            query.and_where(Expr::col(ToolConfig::FileType).eq(ft));
+            query.and_where(Expr::col(ScopeToolConfig::FileType).eq(ft));
         }
         let (sql, values) = query.build_rusqlite(SqliteQueryBuilder);
         let count = self.conn.execute(&sql, &*values.as_params())?;
@@ -445,85 +468,98 @@ impl WorkspaceDb {
     ) -> Result<u64> {
         let mut query = Query::delete();
         query
-            .from_table(TagToolConfig::Table)
-            .and_where(Expr::col(TagToolConfig::Action).eq(action))
-            .and_where(Expr::col(TagToolConfig::Tag).eq(tag));
+            .from_table(ScopeToolConfig::Table)
+            .and_where(Expr::col(ScopeToolConfig::Action).eq(action))
+            .and_where(
+                Expr::col(ScopeToolConfig::ScopeId).in_subquery(
+                    Query::select()
+                        .column(Scopes::Id)
+                        .from(Scopes::Table)
+                        .and_where(Expr::col(Scopes::Name).eq(tag))
+                        .and_where(Expr::col(Scopes::ScopeType).eq("tag"))
+                        .to_owned(),
+                ),
+            );
         if let Some(ft) = file_type {
-            query.and_where(Expr::col(TagToolConfig::FileType).eq(ft));
+            query.and_where(Expr::col(ScopeToolConfig::FileType).eq(ft));
         }
         let (sql, values) = query.build_rusqlite(SqliteQueryBuilder);
         let count = self.conn.execute(&sql, &*values.as_params())?;
         Ok(count as u64)
     }
 
-    // ── Default Pipelines ─────────────────────────────────────────────
-
-    pub fn insert_default_pipeline(&self, pipeline: &Pipeline) -> Result<i64> {
-        super::pipeline::insert_default_pipeline(&self.conn, pipeline)
+    fn get_scope_id_by_name(&self, name: &str) -> Result<Option<i64>> {
+        let (sql, values) = Query::select()
+            .column(Scopes::Id)
+            .from(Scopes::Table)
+            .and_where(Expr::col(Scopes::Name).eq(name))
+            .build_rusqlite(SqliteQueryBuilder);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(&*values.as_params(), |row| row.get::<_, i64>(0))?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
     }
 
-    pub fn list_default_pipelines(&self) -> Result<Vec<Pipeline>> {
-        super::pipeline::list_default_pipelines(&self.conn)
-    }
-
-    pub fn remove_default_pipeline(&self, name: &str) -> Result<u64> {
-        super::pipeline::remove_default_pipeline(&self.conn, name)
+    fn get_or_create_tag_scope(&self, tag: &str) -> Result<Option<i64>> {
+        if let Some(id) = self.get_scope_id_by_name(tag)? {
+            return Ok(Some(id));
+        }
+        let (sql, values) = Query::insert()
+            .into_table(Scopes::Table)
+            .columns([Scopes::Name, Scopes::ScopeType])
+            .values_panic([tag.into(), "tag".into()])
+            .build_rusqlite(SqliteQueryBuilder);
+        self.conn.execute(&sql, &*values.as_params())?;
+        Ok(Some(self.conn.last_insert_rowid()))
     }
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
-    migrate_tool_config_quiet(conn)?;
-    migrate_tag_tool_config_quiet(conn)?;
-    migrate_default_category_type(conn)?;
-    migrate_default_category_policy_table(conn)?;
-    migrate_default_category_name(conn)?;
-    super::pipeline::migrate_default_pipelines_table(conn)
-}
-
-fn migrate_add_column(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<()> {
-    let table_exists = conn
-        .prepare(&format!("SELECT id FROM {table} LIMIT 0"))
+    let has_legacy = conn
+        .prepare("SELECT id FROM default_categories LIMIT 0")
         .is_ok();
-    if !table_exists {
-        return Ok(());
+    if has_legacy {
+        migrate_default_category_type(conn);
+        migrate_default_category_policy_table(conn)?;
+        migrate_default_category_name(conn)?;
+        migrate_tool_config_quiet(conn);
+        migrate_tag_tool_config_quiet(conn);
     }
-    let has_column = conn
-        .prepare(&format!("SELECT {column} FROM {table} LIMIT 0"))
-        .is_ok();
-    if !has_column {
-        conn.execute_batch(alter_sql)?;
-    }
+    super::pipeline::migrate_default_pipelines_table(conn)?;
     Ok(())
 }
 
-fn migrate_tool_config_quiet(conn: &Connection) -> Result<()> {
-    migrate_add_column(
-        conn,
-        "tool_config",
-        "quiet",
-        "ALTER TABLE tool_config ADD COLUMN quiet INTEGER NOT NULL DEFAULT 1;",
-    )
+fn migrate_add_column(conn: &Connection, table: &str, column: &str, definition: &str) -> bool {
+    let check = format!("SELECT {column} FROM {table} LIMIT 0");
+    if conn.prepare(&check).is_ok() {
+        return false;
+    }
+    let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {definition};");
+    conn.execute_batch(&alter).is_ok()
 }
 
-fn migrate_tag_tool_config_quiet(conn: &Connection) -> Result<()> {
+fn migrate_default_category_type(conn: &Connection) {
+    migrate_add_column(
+        conn,
+        "default_categories",
+        "category_type",
+        "TEXT NOT NULL DEFAULT 'files'",
+    );
+}
+
+fn migrate_tool_config_quiet(conn: &Connection) {
+    migrate_add_column(conn, "tool_config", "quiet", "INTEGER NOT NULL DEFAULT 1");
+}
+
+fn migrate_tag_tool_config_quiet(conn: &Connection) {
     migrate_add_column(
         conn,
         "tag_tool_config",
         "quiet",
-        "ALTER TABLE tag_tool_config ADD COLUMN quiet INTEGER NOT NULL DEFAULT 1;",
-    )
-}
-
-fn migrate_default_category_type(conn: &Connection) -> Result<()> {
-    let has_column = conn
-        .prepare("SELECT category_type FROM default_categories LIMIT 0")
-        .is_ok();
-    if !has_column {
-        conn.execute_batch(
-            "ALTER TABLE default_categories ADD COLUMN category_type TEXT NOT NULL DEFAULT 'files';",
-        )?;
-    }
-    Ok(())
+        "INTEGER NOT NULL DEFAULT 1",
+    );
 }
 
 fn migrate_default_category_policy_table(conn: &Connection) -> Result<()> {
@@ -541,62 +577,127 @@ fn migrate_default_category_policy_table(conn: &Connection) -> Result<()> {
             UNIQUE(default_category_id)
         );",
     )?;
-    let has_old_protection = conn
+    let has_old_col = conn
         .prepare("SELECT protection_level FROM default_categories LIMIT 0")
         .is_ok();
-    if has_old_protection {
+    if has_old_col {
         conn.execute_batch(
-            "INSERT INTO default_category_policy (default_category_id, protection_level)
-             SELECT id, protection_level FROM default_categories;",
+            "INSERT OR IGNORE INTO default_category_policy (default_category_id, protection_level)
+             SELECT id, protection_level FROM default_categories WHERE protection_level IS NOT NULL;",
         )?;
     }
     Ok(())
 }
 
 fn migrate_default_category_name(conn: &Connection) -> Result<()> {
-    let has_column = conn
-        .prepare("SELECT name FROM default_categories LIMIT 0")
-        .is_ok();
-    if has_column {
+    if !migrate_add_column(
+        conn,
+        "default_categories",
+        "name",
+        "TEXT NOT NULL DEFAULT ''",
+    ) {
         return Ok(());
     }
-    conn.execute_batch("ALTER TABLE default_categories ADD COLUMN name TEXT NOT NULL DEFAULT '';")?;
-    conn.execute_batch(
-        "UPDATE default_categories SET name = CASE
-            WHEN pattern LIKE '%/**' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 3)
-            WHEN pattern LIKE '%/*' THEN SUBSTR(pattern, 1, LENGTH(pattern) - 2)
-            ELSE pattern
-        END
-        WHERE name = '';",
-    )?;
+    let mut stmt = conn.prepare("SELECT id, pattern FROM default_categories WHERE name = ''")?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(Result::ok)
+        .collect();
+    for (id, pattern) in rows {
+        let name = crate::models::Scope::name_from_pattern(&pattern);
+        conn.execute(
+            "UPDATE default_categories SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, id],
+        )?;
+    }
     Ok(())
 }
 
-const PROJECT_COLUMNS: [Projects; 5] = [
-    Projects::Id,
-    Projects::Name,
-    Projects::Path,
-    Projects::Description,
-    Projects::CreatedAt,
+const SCOPE_COLUMNS: [Scopes; 7] = [
+    Scopes::Id,
+    Scopes::Name,
+    Scopes::ScopeType,
+    Scopes::Pattern,
+    Scopes::CategoryType,
+    Scopes::Description,
+    Scopes::CreatedAt,
 ];
 
-#[derive(Debug, Clone)]
-pub struct ProjectRow {
-    pub id: i64,
-    pub name: String,
-    pub path: String,
-    pub description: Option<String>,
-    pub created_at: String,
+fn row_to_scope(row: &rusqlite::Row) -> rusqlite::Result<Scope> {
+    let scope_type: String = row.get(2)?;
+    let cat_type_str: Option<String> = row.get(4)?;
+    Ok(Scope {
+        id: Some(row.get(0)?),
+        name: row.get(1)?,
+        scope_type: scope_type.parse().map_err(|e| sql_convert_err(2, e))?,
+        pattern: row.get(3)?,
+        category_type: cat_type_str
+            .and_then(|s| if s.is_empty() { None } else { Some(s) })
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|e| sql_convert_err(4, e))?,
+        description: row.get(5)?,
+        created_at: row.get(6)?,
+    })
 }
 
-fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
+fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<ProjectRow> {
     Ok(ProjectRow {
         id: row.get(0)?,
         name: row.get(1)?,
-        path: row.get(2)?,
-        description: row.get(3)?,
-        created_at: row.get(4)?,
+        path: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        description: row.get(5)?,
+        created_at: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
     })
+}
+
+const SCOPE_TOOL_CONFIG_COLUMNS: [ScopeToolConfig; 7] = [
+    ScopeToolConfig::Id,
+    ScopeToolConfig::ScopeId,
+    ScopeToolConfig::Action,
+    ScopeToolConfig::FileType,
+    ScopeToolConfig::Command,
+    ScopeToolConfig::Env,
+    ScopeToolConfig::Quiet,
+];
+
+fn row_to_tool_config(row: &rusqlite::Row) -> rusqlite::Result<super::project::ToolConfigRow> {
+    Ok(super::project::ToolConfigRow {
+        id: row.get(0)?,
+        scope: row.get::<_, Option<i64>>(1)?.map(|_id| String::new()),
+        action: row.get(2)?,
+        file_type: row.get(3)?,
+        command: row.get(4)?,
+        env: row.get(5)?,
+        quiet: row.get::<_, i32>(6)? != 0,
+    })
+}
+
+fn row_to_tag_tool_config(
+    row: &rusqlite::Row,
+) -> rusqlite::Result<super::project::TagToolConfigRow> {
+    Ok(super::project::TagToolConfigRow {
+        id: row.get(0)?,
+        tag: row
+            .get::<_, Option<i64>>(1)?
+            .map_or_else(String::new, |id| id.to_string()),
+        action: row.get(2)?,
+        file_type: row.get(3)?,
+        command: row.get(4)?,
+        env: row.get(5)?,
+        quiet: row.get::<_, i32>(6)? != 0,
+    })
+}
+
+fn sql_convert_err(col: usize, e: impl std::fmt::Display) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        col,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{e}"),
+        )),
+    )
 }
 
 #[cfg(test)]
@@ -605,260 +706,118 @@ mod tests {
     use crate::models::CategoryType;
     use tempfile::TempDir;
 
-    const OLD_SCHEMA_BASE: &str = "
-        CREATE TABLE IF NOT EXISTS workspace_config (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            path TEXT NOT NULL,
-            description TEXT,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS tool_config (
-            id INTEGER PRIMARY KEY,
-            scope TEXT,
-            action TEXT NOT NULL,
-            file_type TEXT NOT NULL,
-            command TEXT NOT NULL,
-            env TEXT
-        );
-        CREATE TABLE IF NOT EXISTS tag_tool_config (
-            id INTEGER PRIMARY KEY,
-            tag TEXT NOT NULL,
-            action TEXT NOT NULL,
-            file_type TEXT NOT NULL,
-            command TEXT NOT NULL,
-            env TEXT,
-            UNIQUE(tag, action, file_type)
-        );
-        CREATE TABLE IF NOT EXISTS entity_links (
-            id INTEGER PRIMARY KEY,
-            entity_name TEXT NOT NULL,
-            entity_type TEXT NOT NULL,
-            project_name TEXT NOT NULL,
-            project_entity_id INTEGER,
-            UNIQUE(entity_name, entity_type, project_name)
-        );
-    ";
-
     fn setup() -> (TempDir, WorkspaceDb) {
         let dir = TempDir::new().unwrap();
-        let db_path = dir.path().join(".mksp");
-        let db = WorkspaceDb::create(&db_path).unwrap();
+        let db = WorkspaceDb::create(&dir.path().join(".mksp")).unwrap();
         (dir, db)
     }
 
-    fn make_test_category(name: &str, pattern: &str) -> Category {
-        Category {
-            id: None,
-            name: name.to_string(),
-            pattern: pattern.to_string(),
-            category_type: CategoryType::Files,
-            description: None,
-        }
-    }
-
     #[test]
-    fn create_and_open() {
-        let dir = TempDir::new().unwrap();
-        let db_path = dir.path().join(".mksp");
-        WorkspaceDb::create(&db_path).unwrap();
-        WorkspaceDb::open(&db_path).unwrap();
-    }
-
-    #[test]
-    fn config_crud() {
+    fn register_and_list_projects() {
         let (_dir, db) = setup();
-        assert!(db.get_config("projects_dir").unwrap().is_none());
-        db.set_config("projects_dir", "projects").unwrap();
-        assert_eq!(db.get_config("projects_dir").unwrap().unwrap(), "projects");
-        db.set_config("projects_dir", "projs").unwrap();
-        assert_eq!(db.get_config("projects_dir").unwrap().unwrap(), "projs");
-    }
-
-    #[test]
-    fn project_registration() {
-        let (_dir, db) = setup();
-        db.register_project("bailey", "projects/bailey", Some("Bailey investigation"))
+        db.register_project("alpha", "projects/alpha", None)
             .unwrap();
-        db.register_project("epstein", "projects/epstein", None)
+        db.register_project("beta", "projects/beta", Some("Beta project"))
             .unwrap();
 
         let projects = db.list_projects().unwrap();
         assert_eq!(projects.len(), 2);
-        assert_eq!(projects[0].name, "bailey");
-        assert_eq!(projects[1].name, "epstein");
-
-        let found = db.get_project_by_name("bailey").unwrap().unwrap();
-        assert_eq!(found.path, "projects/bailey");
-    }
-
-    fn insert_evidence_and_notes(db: &WorkspaceDb) {
-        let id1 = db
-            .insert_default_category(&make_test_category("evidence", "evidence/**"))
-            .unwrap();
-        db.insert_default_category_policy(id1, &ProtectionLevel::Immutable)
-            .unwrap();
-
-        let id2 = db
-            .insert_default_category(&make_test_category("notes", "notes/**"))
-            .unwrap();
-        db.insert_default_category_policy(id2, &ProtectionLevel::Editable)
-            .unwrap();
+        assert_eq!(projects[0].name, "alpha");
+        assert_eq!(projects[0].path, "projects/alpha");
+        assert_eq!(projects[1].name, "beta");
+        assert_eq!(projects[1].description, Some("Beta project".to_string()));
     }
 
     #[test]
-    fn default_categories() {
+    fn get_project_by_name() {
         let (_dir, db) = setup();
-        insert_evidence_and_notes(&db);
+        db.register_project("alpha", "projects/alpha", None)
+            .unwrap();
+
+        let found = db.get_project_by_name("alpha").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().path, "projects/alpha");
+
+        assert!(db.get_project_by_name("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn insert_default_categories() {
+        let (_dir, db) = setup();
+        let cat = Category {
+            id: None,
+            name: "evidence".to_string(),
+            pattern: "evidence/**".to_string(),
+            category_type: CategoryType::Files,
+            description: None,
+        };
+        let id = db.insert_default_category(&cat).unwrap();
+        db.insert_default_category_policy(id, &ProtectionLevel::Immutable)
+            .unwrap();
 
         let cats = db.list_default_categories().unwrap();
-        assert_eq!(cats.len(), 2);
-        assert_eq!(cats[0].category_type, CategoryType::Files);
+        assert_eq!(cats.len(), 1);
+        assert_eq!(cats[0].name, "evidence");
+        assert_eq!(cats[0].pattern, "evidence/**");
+
+        let policy = db.get_default_category_policy(id).unwrap();
+        assert_eq!(policy, Some(ProtectionLevel::Immutable));
     }
 
     #[test]
-    fn default_category_policy_crud() {
+    fn list_default_categories_with_policies() {
         let (_dir, db) = setup();
-        let cat_id = db
-            .insert_default_category(&make_test_category("docs", "docs/**"))
+        let cat = Category {
+            id: None,
+            name: "evidence".to_string(),
+            pattern: "evidence/**".to_string(),
+            category_type: CategoryType::Files,
+            description: None,
+        };
+        let id = db.insert_default_category(&cat).unwrap();
+        db.insert_default_category_policy(id, &ProtectionLevel::Protected)
             .unwrap();
 
-        assert_eq!(db.get_default_category_policy(cat_id).unwrap(), None);
-
-        db.insert_default_category_policy(cat_id, &ProtectionLevel::Protected)
-            .unwrap();
-        assert_eq!(
-            db.get_default_category_policy(cat_id).unwrap(),
-            Some(ProtectionLevel::Protected)
-        );
-
-        db.insert_default_category_policy(cat_id, &ProtectionLevel::Immutable)
-            .unwrap();
-        assert_eq!(
-            db.get_default_category_policy(cat_id).unwrap(),
-            Some(ProtectionLevel::Immutable)
-        );
-    }
-
-    #[test]
-    fn list_with_policies() {
-        let (_dir, db) = setup();
-        insert_evidence_and_notes(&db);
-
-        let with_policies = db.list_default_categories_with_policies().unwrap();
-        assert_eq!(with_policies.len(), 2);
-        assert_eq!(with_policies[0].0.pattern, "evidence/**");
-        assert_eq!(with_policies[0].1, ProtectionLevel::Immutable);
-        assert_eq!(with_policies[1].0.pattern, "notes/**");
-        assert_eq!(with_policies[1].1, ProtectionLevel::Editable);
+        let result = db.list_default_categories_with_policies().unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0.name, "evidence");
+        assert_eq!(result[0].1, ProtectionLevel::Protected);
     }
 
     #[test]
     fn list_with_policies_no_policy_defaults_editable() {
         let (_dir, db) = setup();
-        db.insert_default_category(&make_test_category("stuff", "stuff/**"))
-            .unwrap();
+        let cat = Category {
+            id: None,
+            name: "notes".to_string(),
+            pattern: "notes/**".to_string(),
+            category_type: CategoryType::Files,
+            description: None,
+        };
+        db.insert_default_category(&cat).unwrap();
 
-        let with_policies = db.list_default_categories_with_policies().unwrap();
-        assert_eq!(with_policies.len(), 1);
-        assert_eq!(with_policies[0].1, ProtectionLevel::Editable);
-    }
-
-    fn reopen_and_list_categories(
-        conn: Connection,
-        db_path: &std::path::Path,
-    ) -> (WorkspaceDb, Vec<Category>) {
-        drop(conn);
-        let db = WorkspaceDb::open(db_path).unwrap();
-        let cats = db.list_default_categories().unwrap();
-        (db, cats)
-    }
-
-    fn setup_old_schema(old_categories: &str) -> (TempDir, std::path::PathBuf, Connection) {
-        let dir = TempDir::new().unwrap();
-        let db_path = dir.path().join(".mksp");
-        let old_schema = format!("{OLD_SCHEMA_BASE}{old_categories}");
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .unwrap();
-        conn.execute_batch(&old_schema).unwrap();
-        (dir, db_path, conn)
+        let result = db.list_default_categories_with_policies().unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, ProtectionLevel::Editable);
     }
 
     #[test]
-    fn migrate_adds_category_type_column() {
-        let (_dir, db_path, conn) = setup_old_schema(
-            "
-            CREATE TABLE IF NOT EXISTS default_categories (
-                id INTEGER PRIMARY KEY,
-                pattern TEXT NOT NULL UNIQUE,
-                protection_level TEXT NOT NULL,
-                description TEXT
-            );
-        ",
-        );
-        conn.execute(
-            "INSERT INTO default_categories (pattern, protection_level, description) VALUES (?1, ?2, ?3)",
-            rusqlite::params!["evidence/**", "immutable", "Evidence"],
-        )
-        .unwrap();
-
-        let (_db, cats) = reopen_and_list_categories(conn, &db_path);
-        assert_eq!(cats.len(), 1);
-        assert_eq!(cats[0].category_type, CategoryType::Files);
+    fn project_count() {
+        let (_dir, db) = setup();
+        assert_eq!(db.project_count().unwrap(), 0);
+        db.register_project("alpha", "projects/alpha", None)
+            .unwrap();
+        assert_eq!(db.project_count().unwrap(), 1);
     }
 
     #[test]
-    fn default_policy_migration() {
-        let (_dir, db_path, conn) = setup_old_schema(
-            "
-            CREATE TABLE IF NOT EXISTS default_categories (
-                id INTEGER PRIMARY KEY,
-                pattern TEXT NOT NULL UNIQUE,
-                category_type TEXT NOT NULL DEFAULT 'files',
-                protection_level TEXT NOT NULL,
-                description TEXT
-            );
-        ",
-        );
-        conn.execute(
-            "INSERT INTO default_categories (pattern, category_type, protection_level, description) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["evidence/**", "files", "immutable", "Evidence"],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO default_categories (pattern, category_type, protection_level, description) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["notes/**", "files", "protected", "Notes"],
-        )
-        .unwrap();
-
-        let (db, cats) = reopen_and_list_categories(conn, &db_path);
-        assert_eq!(cats.len(), 2);
-
-        let ev_id = cats
-            .iter()
-            .find(|c| c.pattern == "evidence/**")
-            .unwrap()
-            .id
-            .unwrap();
-        let notes_id = cats
-            .iter()
-            .find(|c| c.pattern == "notes/**")
-            .unwrap()
-            .id
-            .unwrap();
-
+    fn config_get_set() {
+        let (_dir, db) = setup();
+        assert!(db.get_config("projects_dir").unwrap().is_none());
+        db.set_config("projects_dir", "projects/").unwrap();
         assert_eq!(
-            db.get_default_category_policy(ev_id).unwrap(),
-            Some(ProtectionLevel::Immutable)
-        );
-        assert_eq!(
-            db.get_default_category_policy(notes_id).unwrap(),
-            Some(ProtectionLevel::Protected)
+            db.get_config("projects_dir").unwrap(),
+            Some("projects/".to_string())
         );
     }
 }
