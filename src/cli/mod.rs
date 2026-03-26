@@ -19,10 +19,10 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 
-use crate::models::Category;
+use crate::models::Scope;
 
 pub(crate) fn create_category_dir(project_root: &Path, pattern: &str) {
-    let base = Category::name_from_pattern(pattern);
+    let base = Scope::name_from_pattern(pattern);
     if base.is_empty() || base == "**" || base == "*" {
         return;
     }
