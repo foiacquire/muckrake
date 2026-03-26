@@ -57,6 +57,32 @@ impl Category {
     }
 }
 
+impl From<super::scope::Scope> for Category {
+    fn from(scope: super::scope::Scope) -> Self {
+        Self {
+            id: scope.id,
+            name: scope.name,
+            pattern: scope.pattern.unwrap_or_default(),
+            category_type: scope.category_type.unwrap_or_default(),
+            description: scope.description,
+        }
+    }
+}
+
+impl From<&Category> for super::scope::Scope {
+    fn from(cat: &Category) -> Self {
+        Self {
+            id: cat.id,
+            name: cat.name.clone(),
+            scope_type: super::scope::ScopeType::Category,
+            pattern: Some(cat.pattern.clone()),
+            category_type: Some(cat.category_type),
+            description: cat.description.clone(),
+            created_at: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

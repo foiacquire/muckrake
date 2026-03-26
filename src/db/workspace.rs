@@ -292,7 +292,10 @@ impl WorkspaceDb {
             .limit(1)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(&*values.as_params(), super::project::row_to_tool_config)?;
+        let mut rows = stmt.query_map(
+            &*values.as_params(),
+            super::project::legacy_row_to_tool_config,
+        )?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
@@ -322,7 +325,10 @@ impl WorkspaceDb {
             .order_by(TagToolConfig::Tag, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), super::project::row_to_tag_tool_config)?;
+        let rows = stmt.query_map(
+            &*values.as_params(),
+            super::project::legacy_row_to_tag_tool_config,
+        )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -384,7 +390,10 @@ impl WorkspaceDb {
             .order_by(ToolConfig::Action, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), super::project::row_to_tool_config)?;
+        let rows = stmt.query_map(
+            &*values.as_params(),
+            super::project::legacy_row_to_tool_config,
+        )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -395,7 +404,10 @@ impl WorkspaceDb {
             .order_by(TagToolConfig::Tag, Order::Asc)
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), super::project::row_to_tag_tool_config)?;
+        let rows = stmt.query_map(
+            &*values.as_params(),
+            super::project::legacy_row_to_tag_tool_config,
+        )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 

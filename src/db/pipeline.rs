@@ -157,7 +157,7 @@ pub fn get_pipelines_for_file(
     conn: &Connection,
     file_id: i64,
     rel_path: &str,
-    categories: &[crate::models::Category],
+    categories: &[crate::models::Scope],
     tags: &[String],
 ) -> Result<Vec<Pipeline>> {
     let mut pipeline_ids = collect_pipeline_ids_for_scope(conn, rel_path, categories, tags)?;
@@ -186,7 +186,7 @@ pub fn get_pipelines_for_file(
 fn collect_pipeline_ids_for_scope(
     conn: &Connection,
     rel_path: &str,
-    categories: &[crate::models::Category],
+    categories: &[crate::models::Scope],
     tags: &[String],
 ) -> Result<Vec<i64>> {
     let mut ids: Vec<i64> = Vec::new();
@@ -507,7 +507,7 @@ fn row_to_sign(row: &rusqlite::Row) -> rusqlite::Result<Sign> {
 mod tests {
     use super::*;
     use crate::db::ProjectDb;
-    use crate::models::{Category, CategoryType, TrackedFile};
+    use crate::models::{CategoryType, Scope, ScopeType, TrackedFile};
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, ProjectDb) {
@@ -766,22 +766,24 @@ mod tests {
         db.attach_pipeline(pid, AttachmentScope::Category, "evidence")
             .unwrap();
 
-        let cat = Category {
+        let scope = Scope {
             id: Some(1),
             name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: CategoryType::Files,
+            scope_type: ScopeType::Category,
+            pattern: Some("evidence/**".to_string()),
+            category_type: Some(CategoryType::Files),
             description: None,
+            created_at: None,
         };
 
         let pipelines = db
-            .get_pipelines_for_file(1, "evidence/doc.pdf", std::slice::from_ref(&cat), &[])
+            .get_pipelines_for_file(1, "evidence/doc.pdf", std::slice::from_ref(&scope), &[])
             .unwrap();
         assert_eq!(pipelines.len(), 1);
         assert_eq!(pipelines[0].name, "review");
 
         let no_match = db
-            .get_pipelines_for_file(1, "notes/doc.pdf", &[cat], &[])
+            .get_pipelines_for_file(1, "notes/doc.pdf", &[scope], &[])
             .unwrap();
         assert!(no_match.is_empty());
     }
@@ -814,17 +816,19 @@ mod tests {
         db.attach_pipeline(pid, AttachmentScope::Tag, "important")
             .unwrap();
 
-        let cat = Category {
+        let scope = Scope {
             id: Some(1),
             name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: CategoryType::Files,
+            scope_type: ScopeType::Category,
+            pattern: Some("evidence/**".to_string()),
+            category_type: Some(CategoryType::Files),
             description: None,
+            created_at: None,
         };
         let tags = vec!["important".to_string()];
 
         let pipelines = db
-            .get_pipelines_for_file(1, "evidence/doc.pdf", &[cat], &tags)
+            .get_pipelines_for_file(1, "evidence/doc.pdf", &[scope], &tags)
             .unwrap();
         assert_eq!(pipelines.len(), 1);
     }

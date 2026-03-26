@@ -5,27 +5,26 @@ use console::style;
 
 use crate::context::discover;
 use crate::db::ProjectDb;
-use crate::models::{Category, CategoryType, ProtectionLevel};
+use crate::models::scope::CategoryType;
+use crate::models::{Category, ProtectionLevel, Scope};
 use crate::reference::validate_name;
 
 use super::create_category_dir;
 
-/// Resolve a category by name first, then fall back to pattern match.
-fn find_category(db: &ProjectDb, input: &str) -> Result<Option<Category>> {
-    if let Some(cat) = db.get_category_by_name(input)? {
-        return Ok(Some(cat));
+fn find_scope(db: &ProjectDb, input: &str) -> Result<Option<Scope>> {
+    if let Some(scope) = db.get_category_by_name(input)? {
+        return Ok(Some(scope));
     }
     db.get_category_by_pattern(input)
 }
 
-/// Find a category by name/pattern and extract its id, or bail with a clear error.
-fn require_category(db: &ProjectDb, name: &str) -> Result<(Category, i64)> {
-    let cat =
-        find_category(db, name)?.ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
-    let cat_id = cat
+fn require_scope(db: &ProjectDb, name: &str) -> Result<(Scope, i64)> {
+    let scope =
+        find_scope(db, name)?.ok_or_else(|| anyhow::anyhow!("no category matching '{name}'"))?;
+    let scope_id = scope
         .id
         .ok_or_else(|| anyhow::anyhow!("category has no id"))?;
-    Ok((cat, cat_id))
+    Ok((scope, scope_id))
 }
 
 pub fn run_list(cwd: &Path) -> Result<()> {
@@ -44,16 +43,18 @@ pub fn run_list(cwd: &Path) -> Result<()> {
             .and_then(|id| project_db.get_policy_for_category(id).ok().flatten())
             .unwrap_or(ProtectionLevel::Editable);
 
-        let type_label = if cat.category_type == CategoryType::Files {
+        let cat_type = cat.category_type.unwrap_or_default();
+        let type_label = if cat_type == CategoryType::Files {
             String::new()
         } else {
-            format!(" [{}]", cat.category_type)
+            format!(" [{cat_type}]")
         };
 
+        let pattern_str = cat.pattern.as_deref().unwrap_or("");
         println!(
             "  {} {} {}{}",
             style(&cat.name).bold(),
-            style(&cat.pattern).dim(),
+            style(pattern_str).dim(),
             style(protection).dim(),
             type_label
         );
@@ -95,16 +96,16 @@ pub fn run_add(cwd: &Path, params: &AddCategoryParams<'_>) -> Result<()> {
     let cat = Category {
         id: None,
         name: name.to_string(),
-        pattern: resolved_pattern,
+        pattern: resolved_pattern.clone(),
         category_type: cat_type,
         description: params.description.map(String::from),
     };
 
     let cat_id = project_db.insert_category(&cat)?;
     project_db.insert_category_policy(cat_id, &level)?;
-    create_category_dir(project_root, &cat.pattern);
+    create_category_dir(project_root, &resolved_pattern);
 
-    eprintln!("Added category '{}' ({level})", cat.name);
+    eprintln!("Added category '{name}' ({level})");
     Ok(())
 }
 
@@ -116,20 +117,21 @@ pub fn run_update(
 ) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
-    let (cat, cat_id) = require_category(project_db, name)?;
+    let (scope, scope_id) = require_scope(project_db, name)?;
 
     if new_pattern.is_none() && protection.is_none() {
         bail!("nothing to update — specify --pattern or --protection");
     }
 
     if let Some(p) = new_pattern {
-        project_db.update_category_pattern(cat_id, p)?;
-        eprintln!("Updated pattern: {} -> {p}", cat.pattern);
+        project_db.update_category_pattern(scope_id, p)?;
+        let old_pattern = scope.pattern.as_deref().unwrap_or("(none)");
+        eprintln!("Updated pattern: {old_pattern} -> {p}");
     }
 
     if let Some(level_str) = protection {
         let level: ProtectionLevel = level_str.parse()?;
-        project_db.insert_category_policy(cat_id, &level)?;
+        project_db.insert_category_policy(scope_id, &level)?;
         eprintln!("Updated protection: {level}");
     }
 
@@ -139,10 +141,10 @@ pub fn run_update(
 pub fn run_remove(cwd: &Path, name: &str) -> Result<()> {
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
-    let (cat, cat_id) = require_category(project_db, name)?;
+    let (scope, scope_id) = require_scope(project_db, name)?;
 
-    project_db.remove_category(cat_id)?;
-    eprintln!("Removed category '{}'", cat.name);
+    project_db.remove_category(scope_id)?;
+    eprintln!("Removed category '{}'", scope.name);
 
     Ok(())
 }

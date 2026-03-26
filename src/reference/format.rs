@@ -1,5 +1,5 @@
 use crate::db::ProjectDb;
-use crate::models::Category;
+use crate::models::Scope;
 
 /// Format a file path as a canonical reference string.
 ///
@@ -18,7 +18,8 @@ pub fn format_ref(path: &str, project_name: Option<&str>, db: &ProjectDb) -> Str
     let category = db.match_category(path).ok().flatten();
 
     if let Some(ref cat) = category {
-        let base = Category::name_from_pattern(&cat.pattern);
+        let pattern = cat.pattern.as_deref().unwrap_or("");
+        let base = Scope::name_from_pattern(pattern);
         let relative = path
             .strip_prefix(&base)
             .and_then(|s| s.strip_prefix('/'))

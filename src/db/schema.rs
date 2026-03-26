@@ -1,3 +1,33 @@
+pub(super) const SCOPE_TABLES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS scopes (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    scope_type TEXT NOT NULL,
+    pattern TEXT,
+    category_type TEXT DEFAULT 'files',
+    description TEXT,
+    created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS scope_policy (
+    id INTEGER PRIMARY KEY,
+    scope_id INTEGER NOT NULL UNIQUE REFERENCES scopes(id),
+    protection_level TEXT NOT NULL DEFAULT 'editable'
+);
+
+CREATE TABLE IF NOT EXISTS scope_tool_config (
+    id INTEGER PRIMARY KEY,
+    scope_id INTEGER REFERENCES scopes(id),
+    action TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    command TEXT NOT NULL,
+    env TEXT,
+    quiet INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(scope_id, action, file_type)
+);
+";
+
+// Legacy — used for migration from old schema
 const TOOL_TABLES_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS tool_config (
     id INTEGER PRIMARY KEY,
@@ -22,21 +52,6 @@ CREATE TABLE IF NOT EXISTS tag_tool_config (
 ";
 
 pub const PROJECT_SCHEMA_PREFIX: &str = "
-CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL DEFAULT '',
-    pattern TEXT NOT NULL UNIQUE,
-    category_type TEXT NOT NULL DEFAULT 'files',
-    description TEXT
-);
-
-CREATE TABLE IF NOT EXISTS category_policy (
-    id INTEGER PRIMARY KEY,
-    category_id INTEGER NOT NULL REFERENCES categories(id),
-    protection_level TEXT NOT NULL DEFAULT 'editable',
-    UNIQUE(category_id)
-);
-
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
     sha256 TEXT NOT NULL UNIQUE,
@@ -194,9 +209,9 @@ CREATE TABLE IF NOT EXISTS entity_links (
 use std::sync::LazyLock;
 
 pub static PROJECT_SCHEMA: LazyLock<String> = LazyLock::new(|| {
-    format!("{PROJECT_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{PIPELINE_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}")
+    format!("{SCOPE_TABLES_SCHEMA}{PROJECT_SCHEMA_PREFIX}{PIPELINE_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}")
 });
 
 pub static WORKSPACE_SCHEMA: LazyLock<String> = LazyLock::new(|| {
-    format!("{WORKSPACE_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{DEFAULT_PIPELINES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
+    format!("{WORKSPACE_SCHEMA_PREFIX}{TOOL_TABLES_SCHEMA}{SCOPE_TABLES_SCHEMA}{DEFAULT_PIPELINES_SCHEMA}{WORKSPACE_SCHEMA_SUFFIX}")
 });

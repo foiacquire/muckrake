@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::db::ProjectDb;
-use crate::models::Category;
+use crate::models::Scope;
 
 /// Recursively walk `root`, skipping dot-prefixed entries, and collect relative
 /// paths whose string form matches at least one of `patterns`.
@@ -94,7 +94,8 @@ pub fn category_patterns(
     };
 
     if let Some(cat) = db.get_category_by_name(name)? {
-        let base = Category::name_from_pattern(&cat.pattern);
+        let pattern = cat.pattern.as_deref().unwrap_or("");
+        let base = Scope::name_from_pattern(pattern);
         return Ok(vec![
             glob::Pattern::new(&format!("{base}/*"))?,
             glob::Pattern::new(&format!("{base}/**/*"))?,

@@ -8,7 +8,7 @@ use console::style;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::integrity;
-use crate::models::{Category, Pipeline, Sign, TrackedFile, TriggerEvent};
+use crate::models::{Pipeline, Scope, Sign, TrackedFile, TriggerEvent};
 use crate::pipeline::state::{derive_file_state, FileState};
 use crate::reference::{format_ref, parse_reference, resolve_file_ref, resolve_references};
 use crate::rules::RuleEvent;
@@ -246,7 +246,7 @@ fn resolve_file_pipelines(
     project_db: &ProjectDb,
     file_id: i64,
     rel_path: &str,
-    categories: &[Category],
+    categories: &[Scope],
     pipeline_name: Option<&str>,
 ) -> Result<Vec<Pipeline>> {
     let tags = project_db.get_tags(file_id)?;

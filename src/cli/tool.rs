@@ -352,18 +352,15 @@ fn tool_patterns(project_root: &Path, project_db: &ProjectDb) -> Vec<String> {
     let mut patterns = Vec::new();
     for cat in categories
         .iter()
-        .filter(|c| c.category_type == CategoryType::Tools)
+        .filter(|c| c.category_type == Some(CategoryType::Tools))
     {
         let root = project_root.display();
-        // Category patterns use `**` for recursive matching (e.g., `tools/**`).
-        // The glob crate's `**` only matches subdirectory contents, not direct
-        // children. Emit both `tools/*` and `tools/**/*` to cover all depths.
-        if cat.pattern.ends_with("/**") {
-            let base = &cat.pattern[..cat.pattern.len() - 3];
+        let pattern = cat.pattern.as_deref().unwrap_or("");
+        if let Some(base) = pattern.strip_suffix("/**") {
             patterns.push(format!("{root}/{base}/*"));
             patterns.push(format!("{root}/{base}/**/*"));
         } else {
-            patterns.push(format!("{root}/{}", cat.pattern));
+            patterns.push(format!("{root}/{pattern}"));
         }
     }
     patterns
