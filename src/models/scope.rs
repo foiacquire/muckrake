@@ -3,7 +3,36 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-pub use super::category::CategoryType;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CategoryType {
+    #[default]
+    Files,
+    Tools,
+    Inbox,
+}
+
+impl fmt::Display for CategoryType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Files => write!(f, "files"),
+            Self::Tools => write!(f, "tools"),
+            Self::Inbox => write!(f, "inbox"),
+        }
+    }
+}
+
+impl FromStr for CategoryType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "files" => Ok(Self::Files),
+            "tools" => Ok(Self::Tools),
+            "inbox" => Ok(Self::Inbox),
+            other => Err(anyhow::anyhow!("unknown category type: {other}")),
+        }
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScopeType {

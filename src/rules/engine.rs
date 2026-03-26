@@ -747,15 +747,15 @@ mod tests {
 
     #[test]
     fn filter_category() {
-        use crate::models::{Category, CategoryType};
-
         let (_dir, db) = setup_db();
-        db.insert_category(&Category {
+        db.insert_scope(&crate::models::Scope {
             id: None,
             name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: CategoryType::Files,
+            scope_type: crate::models::ScopeType::Category,
+            pattern: Some("evidence/**".to_string()),
+            category_type: Some(crate::models::scope::CategoryType::Files),
             description: None,
+            created_at: None,
         })
         .unwrap();
 

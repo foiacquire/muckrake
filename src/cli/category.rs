@@ -40,7 +40,7 @@ pub fn run_list(cwd: &Path) -> Result<()> {
     for cat in &categories {
         let protection = cat
             .id
-            .and_then(|id| project_db.get_policy_for_category(id).ok().flatten())
+            .and_then(|id| project_db.get_policy_for_scope(id).ok().flatten())
             .unwrap_or(ProtectionLevel::Editable);
 
         let cat_type = cat.category_type.unwrap_or_default();
@@ -126,14 +126,14 @@ pub fn run_update(
     }
 
     if let Some(p) = new_pattern {
-        project_db.update_category_pattern(scope_id, p)?;
+        project_db.update_scope_pattern(scope_id, p)?;
         let old_pattern = scope.pattern.as_deref().unwrap_or("(none)");
         eprintln!("Updated pattern: {old_pattern} -> {p}");
     }
 
     if let Some(level_str) = protection {
         let level: ProtectionLevel = level_str.parse()?;
-        project_db.insert_category_policy(scope_id, &level)?;
+        project_db.insert_scope_policy(scope_id, &level)?;
         eprintln!("Updated protection: {level}");
     }
 
@@ -145,7 +145,7 @@ pub fn run_remove(cwd: &Path, name: &str) -> Result<()> {
     let (_, project_db) = ctx.require_project()?;
     let (scope, scope_id) = require_scope(project_db, name)?;
 
-    project_db.remove_category(scope_id)?;
+    project_db.remove_scope(scope_id)?;
     eprintln!("Removed category '{}'", scope.name);
 
     Ok(())

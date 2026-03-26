@@ -394,19 +394,21 @@ fn discover_tool(project_root: &Path, project_db: &ProjectDb, name: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Category;
+    use crate::models::{Scope, ScopeType};
     use tempfile::TempDir;
 
     fn setup_project_with_tools(dir: &Path) -> (PathBuf, ProjectDb) {
         let tools_dir = dir.join("tools");
         std::fs::create_dir_all(&tools_dir).unwrap();
         let db = ProjectDb::create(&dir.join(".mkrk")).unwrap();
-        db.insert_category(&Category {
+        db.insert_scope(&Scope {
             id: None,
             name: "tools".to_string(),
-            pattern: "tools/**".to_string(),
-            category_type: CategoryType::Tools,
+            scope_type: ScopeType::Category,
+            pattern: Some("tools/**".to_string()),
+            category_type: Some(CategoryType::Tools),
             description: None,
+            created_at: None,
         })
         .unwrap();
         (tools_dir, db)
@@ -467,12 +469,14 @@ mod tests {
         let scripts_dir = dir.path().join("scripts");
         std::fs::create_dir_all(&scripts_dir).unwrap();
         let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
-        db.insert_category(&Category {
+        db.insert_scope(&Scope {
             id: None,
             name: "scripts".to_string(),
-            pattern: "scripts/**".to_string(),
-            category_type: CategoryType::Tools,
+            scope_type: ScopeType::Category,
+            pattern: Some("scripts/**".to_string()),
+            category_type: Some(CategoryType::Tools),
             description: None,
+            created_at: None,
         })
         .unwrap();
         let tool = scripts_dir.join("ocr.sh");

@@ -543,24 +543,23 @@ mod tests {
         }
     }
 
+    fn make_cat(name: &str, pattern: &str) -> crate::models::Scope {
+        crate::models::Scope {
+            id: None,
+            name: name.to_string(),
+            scope_type: crate::models::ScopeType::Category,
+            pattern: Some(pattern.to_string()),
+            category_type: Some(crate::models::scope::CategoryType::Files),
+            description: None,
+            created_at: None,
+        }
+    }
+
     fn setup_project(dir: &std::path::Path) -> ProjectDb {
         let db = ProjectDb::create(&dir.join(".mkrk")).unwrap();
-        let cat = crate::models::Category {
-            id: None,
-            name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        };
-        db.insert_category(&cat).unwrap();
-        let cat2 = crate::models::Category {
-            id: None,
-            name: "notes".to_string(),
-            pattern: "notes/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        };
-        db.insert_category(&cat2).unwrap();
+        db.insert_scope(&make_cat("evidence", "evidence/**"))
+            .unwrap();
+        db.insert_scope(&make_cat("notes", "notes/**")).unwrap();
         db
     }
 
@@ -594,14 +593,8 @@ mod tests {
         let proj_dir = ws.ws_dir.path().join("projects").join(name);
         std::fs::create_dir_all(&proj_dir).unwrap();
         let db = ProjectDb::create(&proj_dir.join(".mkrk")).unwrap();
-        db.insert_category(&crate::models::Category {
-            id: None,
-            name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: crate::models::CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        db.insert_scope(&make_cat("evidence", "evidence/**"))
+            .unwrap();
         ws.ws_db
             .register_project(name, &format!("projects/{name}"), None)
             .unwrap();

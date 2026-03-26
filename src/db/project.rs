@@ -11,7 +11,7 @@ use sea_query_rusqlite::RusqliteBinder;
 
 use crate::models::policy::strictest;
 use crate::models::{
-    ActionConfig, ActionType, AttachmentScope, Category, FileTag, Pipeline, PipelineAttachment,
+    ActionConfig, ActionType, AttachmentScope, FileTag, Pipeline, PipelineAttachment,
     ProtectionLevel, Rule, Scope, ScopeType, Sign, TrackedFile, TriggerEvent, TriggerFilter,
 };
 
@@ -45,15 +45,6 @@ impl ProjectDb {
         Ok(Self { conn })
     }
 
-    pub fn insert_category(&self, cat: &Category) -> Result<i64> {
-        let scope: Scope = cat.into();
-        self.insert_scope(&scope)
-    }
-
-    pub fn insert_category_policy(&self, category_id: i64, level: &ProtectionLevel) -> Result<()> {
-        self.insert_scope_policy(category_id, level)
-    }
-
     pub fn get_category_by_pattern(&self, pattern: &str) -> Result<Option<Scope>> {
         let (sql, values) = Query::select()
             .columns(SCOPE_COLUMNS)
@@ -67,18 +58,6 @@ impl ProjectDb {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
-    }
-
-    pub fn update_category_pattern(&self, category_id: i64, new_pattern: &str) -> Result<()> {
-        self.update_scope_pattern(category_id, new_pattern)
-    }
-
-    pub fn remove_category(&self, category_id: i64) -> Result<()> {
-        self.remove_scope(category_id)
-    }
-
-    pub fn get_policy_for_category(&self, category_id: i64) -> Result<Option<ProtectionLevel>> {
-        self.get_policy_for_scope(category_id)
     }
 
     pub fn insert_scope(&self, scope: &Scope) -> Result<i64> {
@@ -1467,8 +1446,20 @@ fn migrate_file_tags_fingerprint(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::CategoryType;
+    use crate::models::scope::CategoryType;
     use tempfile::TempDir;
+
+    fn make_cat(name: &str, pattern: &str) -> Scope {
+        Scope {
+            id: None,
+            name: name.to_string(),
+            scope_type: ScopeType::Category,
+            pattern: Some(pattern.to_string()),
+            category_type: Some(CategoryType::Files),
+            description: None,
+            created_at: None,
+        }
+    }
 
     fn setup() -> (TempDir, ProjectDb) {
         let dir = TempDir::new().unwrap();
@@ -1488,22 +1479,17 @@ mod tests {
     #[test]
     fn category_crud() {
         let (_dir, db) = setup();
-        let cat = Category {
-            id: None,
-            name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: CategoryType::Files,
-            description: Some("Evidence files".to_string()),
-        };
-        let cat_id = db.insert_category(&cat).unwrap();
-        db.insert_category_policy(cat_id, &ProtectionLevel::Immutable)
+        let mut scope = make_cat("evidence", "evidence/**");
+        scope.description = Some("Evidence files".to_string());
+        let cat_id = db.insert_scope(&scope).unwrap();
+        db.insert_scope_policy(cat_id, &ProtectionLevel::Immutable)
             .unwrap();
         let cats = db.list_categories().unwrap();
         assert_eq!(cats.len(), 1);
         assert_eq!(cats[0].pattern.as_deref(), Some("evidence/**"));
         assert_eq!(cats[0].category_type, Some(CategoryType::Files));
 
-        let policy = db.get_policy_for_category(cat_id).unwrap();
+        let policy = db.get_policy_for_scope(cat_id).unwrap();
         assert_eq!(policy, Some(ProtectionLevel::Immutable));
     }
 
@@ -1515,14 +1501,9 @@ mod tests {
             CategoryType::Tools,
             CategoryType::Inbox,
         ] {
-            let cat = Category {
-                id: None,
-                name: ct.to_string(),
-                pattern: format!("{ct}/**"),
-                category_type: *ct,
-                description: None,
-            };
-            db.insert_category(&cat).unwrap();
+            let mut scope = make_cat(&ct.to_string(), &format!("{ct}/**"));
+            scope.category_type = Some(*ct);
+            db.insert_scope(&scope).unwrap();
         }
         let cats = db.list_categories().unwrap();
         assert_eq!(cats.len(), 3);
@@ -1795,27 +1776,15 @@ mod tests {
     fn match_category_most_specific() {
         let (_dir, db) = setup();
         let id1 = db
-            .insert_category(&Category {
-                id: None,
-                name: "evidence".to_string(),
-                pattern: "evidence/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat("evidence", "evidence/**"))
             .unwrap();
-        db.insert_category_policy(id1, &ProtectionLevel::Immutable)
+        db.insert_scope_policy(id1, &ProtectionLevel::Immutable)
             .unwrap();
 
         let id2 = db
-            .insert_category(&Category {
-                id: None,
-                name: "evidence/financial".to_string(),
-                pattern: "evidence/financial/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat("evidence/financial", "evidence/financial/**"))
             .unwrap();
-        db.insert_category_policy(id2, &ProtectionLevel::Protected)
+        db.insert_scope_policy(id2, &ProtectionLevel::Protected)
             .unwrap();
 
         // Parent's stricter policy (immutable) wins over child's (protected)
@@ -1831,28 +1800,14 @@ mod tests {
     #[test]
     fn resolve_protection_child_can_tighten() {
         let (_dir, db) = setup();
-        let id1 = db
-            .insert_category(&Category {
-                id: None,
-                name: "notes".to_string(),
-                pattern: "notes/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
-            .unwrap();
-        db.insert_category_policy(id1, &ProtectionLevel::Editable)
+        let id1 = db.insert_scope(&make_cat("notes", "notes/**")).unwrap();
+        db.insert_scope_policy(id1, &ProtectionLevel::Editable)
             .unwrap();
 
         let id2 = db
-            .insert_category(&Category {
-                id: None,
-                name: "notes/confidential".to_string(),
-                pattern: "notes/confidential/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat("notes/confidential", "notes/confidential/**"))
             .unwrap();
-        db.insert_category_policy(id2, &ProtectionLevel::Protected)
+        db.insert_scope_policy(id2, &ProtectionLevel::Protected)
             .unwrap();
 
         // Child tightens from editable to protected
@@ -1868,39 +1823,24 @@ mod tests {
     fn resolve_protection_multiple_overlapping() {
         let (_dir, db) = setup();
         let id1 = db
-            .insert_category(&Category {
-                id: None,
-                name: "evidence".to_string(),
-                pattern: "evidence/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat("evidence", "evidence/**"))
             .unwrap();
-        db.insert_category_policy(id1, &ProtectionLevel::Protected)
+        db.insert_scope_policy(id1, &ProtectionLevel::Protected)
             .unwrap();
 
         let id2 = db
-            .insert_category(&Category {
-                id: None,
-                name: "evidence/financial".to_string(),
-                pattern: "evidence/financial/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat("evidence/financial", "evidence/financial/**"))
             .unwrap();
-        db.insert_category_policy(id2, &ProtectionLevel::Editable)
+        db.insert_scope_policy(id2, &ProtectionLevel::Editable)
             .unwrap();
 
         let id3 = db
-            .insert_category(&Category {
-                id: None,
-                name: "evidence/financial/tax".to_string(),
-                pattern: "evidence/financial/tax/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat(
+                "evidence/financial/tax",
+                "evidence/financial/tax/**",
+            ))
             .unwrap();
-        db.insert_category_policy(id3, &ProtectionLevel::Immutable)
+        db.insert_scope_policy(id3, &ProtectionLevel::Immutable)
             .unwrap();
 
         // Three overlapping: protected + editable + immutable → immutable wins
@@ -1955,29 +1895,21 @@ mod tests {
     #[test]
     fn category_policy_crud() {
         let (_dir, db) = setup();
-        let cat_id = db
-            .insert_category(&Category {
-                id: None,
-                name: "docs".to_string(),
-                pattern: "docs/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
-            .unwrap();
+        let cat_id = db.insert_scope(&make_cat("docs", "docs/**")).unwrap();
 
-        assert_eq!(db.get_policy_for_category(cat_id).unwrap(), None);
+        assert_eq!(db.get_policy_for_scope(cat_id).unwrap(), None);
 
-        db.insert_category_policy(cat_id, &ProtectionLevel::Protected)
+        db.insert_scope_policy(cat_id, &ProtectionLevel::Protected)
             .unwrap();
         assert_eq!(
-            db.get_policy_for_category(cat_id).unwrap(),
+            db.get_policy_for_scope(cat_id).unwrap(),
             Some(ProtectionLevel::Protected)
         );
 
-        db.insert_category_policy(cat_id, &ProtectionLevel::Immutable)
+        db.insert_scope_policy(cat_id, &ProtectionLevel::Immutable)
             .unwrap();
         assert_eq!(
-            db.get_policy_for_category(cat_id).unwrap(),
+            db.get_policy_for_scope(cat_id).unwrap(),
             Some(ProtectionLevel::Immutable)
         );
     }
@@ -1986,15 +1918,9 @@ mod tests {
     fn resolve_protection_with_policy() {
         let (_dir, db) = setup();
         let cat_id = db
-            .insert_category(&Category {
-                id: None,
-                name: "evidence".to_string(),
-                pattern: "evidence/**".to_string(),
-                category_type: CategoryType::Files,
-                description: None,
-            })
+            .insert_scope(&make_cat("evidence", "evidence/**"))
             .unwrap();
-        db.insert_category_policy(cat_id, &ProtectionLevel::Immutable)
+        db.insert_scope_policy(cat_id, &ProtectionLevel::Immutable)
             .unwrap();
 
         assert_eq!(
@@ -2015,14 +1941,7 @@ mod tests {
     #[test]
     fn resolve_protection_category_without_policy_defaults_editable() {
         let (_dir, db) = setup();
-        db.insert_category(&Category {
-            id: None,
-            name: "notes".to_string(),
-            pattern: "notes/**".to_string(),
-            category_type: CategoryType::Files,
-            description: None,
-        })
-        .unwrap();
+        db.insert_scope(&make_cat("notes", "notes/**")).unwrap();
 
         assert_eq!(
             db.resolve_protection("notes/todo.md").unwrap(),
@@ -2111,11 +2030,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            db.get_policy_for_category(ev_id).unwrap(),
+            db.get_policy_for_scope(ev_id).unwrap(),
             Some(ProtectionLevel::Immutable)
         );
         assert_eq!(
-            db.get_policy_for_category(notes_id).unwrap(),
+            db.get_policy_for_scope(notes_id).unwrap(),
             Some(ProtectionLevel::Protected)
         );
     }

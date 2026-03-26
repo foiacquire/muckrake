@@ -84,12 +84,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db = ProjectDb::create(&dir.path().join(".mkrk")).unwrap();
         for (name, pattern) in categories {
-            db.insert_category(&crate::models::Category {
+            db.insert_scope(&crate::models::Scope {
                 id: None,
                 name: (*name).to_string(),
-                pattern: (*pattern).to_string(),
-                category_type: crate::models::CategoryType::Files,
+                scope_type: crate::models::ScopeType::Category,
+                pattern: Some((*pattern).to_string()),
+                category_type: Some(crate::models::scope::CategoryType::Files),
                 description: None,
+                created_at: None,
             })
             .unwrap();
         }
