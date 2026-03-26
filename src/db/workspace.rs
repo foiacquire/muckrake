@@ -9,7 +9,7 @@ use sea_query::{
 };
 use sea_query_rusqlite::RusqliteBinder;
 
-use crate::models::{Category, ProtectionLevel, Scope};
+use crate::models::{ProtectionLevel, Scope};
 use crate::reference::validate_name;
 
 use super::iden::{ScopePolicy, ScopeToolConfig, Scopes, WorkspaceConfig};
@@ -136,8 +136,7 @@ impl WorkspaceDb {
         }
     }
 
-    pub fn insert_default_category(&self, cat: &Category) -> Result<i64> {
-        let scope: Scope = cat.into();
+    pub fn insert_default_category(&self, scope: &Scope) -> Result<i64> {
         let (sql, values) = Query::insert()
             .into_table(Scopes::Table)
             .columns([
@@ -163,17 +162,14 @@ impl WorkspaceDb {
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn list_default_categories(&self) -> Result<Vec<Category>> {
+    pub fn list_default_categories(&self) -> Result<Vec<Scope>> {
         let (sql, values) = Query::select()
             .columns(SCOPE_COLUMNS)
             .from(Scopes::Table)
             .and_where(Expr::col(Scopes::ScopeType).eq("category"))
             .build_rusqlite(SqliteQueryBuilder);
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*values.as_params(), |row| {
-            let scope = row_to_scope(row)?;
-            Ok(Category::from(scope))
-        })?;
+        let rows = stmt.query_map(&*values.as_params(), row_to_scope)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -219,9 +215,7 @@ impl WorkspaceDb {
         }
     }
 
-    pub fn list_default_categories_with_policies(
-        &self,
-    ) -> Result<Vec<(Category, ProtectionLevel)>> {
+    pub fn list_default_categories_with_policies(&self) -> Result<Vec<(Scope, ProtectionLevel)>> {
         let cats = self.list_default_categories()?;
         let mut result = Vec::with_capacity(cats.len());
         for cat in cats {
@@ -703,7 +697,8 @@ fn sql_convert_err(col: usize, e: impl std::fmt::Display) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::CategoryType;
+    use crate::models::scope::CategoryType;
+    use crate::models::ScopeType;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, WorkspaceDb) {
@@ -744,21 +739,23 @@ mod tests {
     #[test]
     fn insert_default_categories() {
         let (_dir, db) = setup();
-        let cat = Category {
+        let scope = Scope {
             id: None,
             name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: CategoryType::Files,
+            scope_type: ScopeType::Category,
+            pattern: Some("evidence/**".to_string()),
+            category_type: Some(CategoryType::Files),
             description: None,
+            created_at: None,
         };
-        let id = db.insert_default_category(&cat).unwrap();
+        let id = db.insert_default_category(&scope).unwrap();
         db.insert_default_category_policy(id, &ProtectionLevel::Immutable)
             .unwrap();
 
         let cats = db.list_default_categories().unwrap();
         assert_eq!(cats.len(), 1);
         assert_eq!(cats[0].name, "evidence");
-        assert_eq!(cats[0].pattern, "evidence/**");
+        assert_eq!(cats[0].pattern.as_deref(), Some("evidence/**"));
 
         let policy = db.get_default_category_policy(id).unwrap();
         assert_eq!(policy, Some(ProtectionLevel::Immutable));
@@ -767,14 +764,16 @@ mod tests {
     #[test]
     fn list_default_categories_with_policies() {
         let (_dir, db) = setup();
-        let cat = Category {
+        let scope = Scope {
             id: None,
             name: "evidence".to_string(),
-            pattern: "evidence/**".to_string(),
-            category_type: CategoryType::Files,
+            scope_type: ScopeType::Category,
+            pattern: Some("evidence/**".to_string()),
+            category_type: Some(CategoryType::Files),
             description: None,
+            created_at: None,
         };
-        let id = db.insert_default_category(&cat).unwrap();
+        let id = db.insert_default_category(&scope).unwrap();
         db.insert_default_category_policy(id, &ProtectionLevel::Protected)
             .unwrap();
 
@@ -787,14 +786,16 @@ mod tests {
     #[test]
     fn list_with_policies_no_policy_defaults_editable() {
         let (_dir, db) = setup();
-        let cat = Category {
+        let scope = Scope {
             id: None,
             name: "notes".to_string(),
-            pattern: "notes/**".to_string(),
-            category_type: CategoryType::Files,
+            scope_type: ScopeType::Category,
+            pattern: Some("notes/**".to_string()),
+            category_type: Some(CategoryType::Files),
             description: None,
+            created_at: None,
         };
-        db.insert_default_category(&cat).unwrap();
+        db.insert_default_category(&scope).unwrap();
 
         let result = db.list_default_categories_with_policies().unwrap();
         assert_eq!(result.len(), 1);

@@ -6,7 +6,7 @@ use console::style;
 use crate::context::discover;
 use crate::db::ProjectDb;
 use crate::models::scope::CategoryType;
-use crate::models::{Category, ProtectionLevel, Scope};
+use crate::models::{ProtectionLevel, Scope, ScopeType};
 use crate::reference::validate_name;
 
 use super::create_category_dir;
@@ -93,16 +93,18 @@ pub fn run_add(cwd: &Path, params: &AddCategoryParams<'_>) -> Result<()> {
     let cat_type: CategoryType = params.category_type.parse()?;
     let level: ProtectionLevel = params.protection.parse()?;
 
-    let cat = Category {
+    let scope = Scope {
         id: None,
         name: name.to_string(),
-        pattern: resolved_pattern.clone(),
-        category_type: cat_type,
+        scope_type: ScopeType::Category,
+        pattern: Some(resolved_pattern.clone()),
+        category_type: Some(cat_type),
         description: params.description.map(String::from),
+        created_at: None,
     };
 
-    let cat_id = project_db.insert_category(&cat)?;
-    project_db.insert_category_policy(cat_id, &level)?;
+    let scope_id = project_db.insert_scope(&scope)?;
+    project_db.insert_scope_policy(scope_id, &level)?;
     create_category_dir(project_root, &resolved_pattern);
 
     eprintln!("Added category '{name}' ({level})");

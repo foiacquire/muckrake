@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 
 use crate::db::{ProjectDb, WorkspaceDb};
-use crate::models::{Category, CategoryType, ProtectionLevel};
+use crate::models::scope::CategoryType;
+use crate::models::{ProtectionLevel, Scope, ScopeType};
 use crate::reference::validate_name;
 
 use super::create_category_dir;
@@ -62,10 +63,12 @@ pub fn run_init_project(
     let project_db = ProjectDb::create(&db_path)?;
 
     let items = resolve_categories_with_policies(&project_dir, no_categories, custom_categories)?;
-    for (cat, level) in &items {
-        let cat_id = project_db.insert_category(cat)?;
-        project_db.insert_category_policy(cat_id, level)?;
-        create_category_dir(&project_dir, &cat.pattern);
+    for (scope, level) in &items {
+        let scope_id = project_db.insert_scope(scope)?;
+        project_db.insert_scope_policy(scope_id, level)?;
+        if let Some(ref pattern) = scope.pattern {
+            create_category_dir(&project_dir, pattern);
+        }
     }
 
     register_in_workspace(&project_dir)?;
@@ -116,7 +119,7 @@ fn resolve_categories_with_policies(
     cwd: &Path,
     no_categories: bool,
     custom_categories: &[String],
-) -> Result<Vec<(Category, ProtectionLevel)>> {
+) -> Result<Vec<(Scope, ProtectionLevel)>> {
     if !custom_categories.is_empty() {
         return parse_custom_with_policies(custom_categories);
     }
@@ -134,7 +137,7 @@ fn resolve_categories_with_policies(
     Ok(default_categories_with_policies())
 }
 
-fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, ProtectionLevel)>> {
+fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Scope, ProtectionLevel)>> {
     specs
         .iter()
         .map(|s| {
@@ -144,13 +147,12 @@ fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, Protect
                     let pattern = parts[0];
                     let protection_level: ProtectionLevel = parts[1].parse()?;
                     Ok((
-                        Category {
-                            id: None,
-                            name: Category::name_from_pattern(pattern),
-                            pattern: pattern.to_string(),
-                            category_type: CategoryType::Files,
-                            description: None,
-                        },
+                        make_category_scope(
+                            &Scope::name_from_pattern(pattern),
+                            pattern,
+                            CategoryType::Files,
+                            None,
+                        ),
                         protection_level,
                     ))
                 }
@@ -159,13 +161,12 @@ fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, Protect
                     let category_type: CategoryType = parts[1].parse()?;
                     let protection_level: ProtectionLevel = parts[2].parse()?;
                     Ok((
-                        Category {
-                            id: None,
-                            name: Category::name_from_pattern(pattern),
-                            pattern: pattern.to_string(),
+                        make_category_scope(
+                            &Scope::name_from_pattern(pattern),
+                            pattern,
                             category_type,
-                            description: None,
-                        },
+                            None,
+                        ),
                         protection_level,
                     ))
                 }
@@ -175,14 +176,13 @@ fn parse_custom_with_policies(specs: &[String]) -> Result<Vec<(Category, Protect
         .collect()
 }
 
-fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<(Category, ProtectionLevel)>>> {
+fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<(Scope, ProtectionLevel)>>> {
     let mut dir = cwd.to_path_buf();
     loop {
         let mksp = dir.join(".mksp");
         if mksp.exists() {
             let ws_db = WorkspaceDb::open(&mksp)?;
-            let items = ws_db.list_default_categories_with_policies()?;
-            return Ok(Some(items));
+            return Ok(Some(ws_db.list_default_categories_with_policies()?));
         }
         if !dir.pop() {
             break;
@@ -191,22 +191,30 @@ fn load_workspace_defaults(cwd: &Path) -> Result<Option<Vec<(Category, Protectio
     Ok(None)
 }
 
-fn category_from_default(name: &str, pattern: &str, cat_type: &str, desc: &str) -> Category {
-    Category {
+fn make_category_scope(
+    name: &str,
+    pattern: &str,
+    cat_type: CategoryType,
+    description: Option<String>,
+) -> Scope {
+    Scope {
         id: None,
         name: name.to_string(),
-        pattern: pattern.to_string(),
-        category_type: cat_type.parse().expect("invalid default category type"),
-        description: Some(desc.to_string()),
+        scope_type: ScopeType::Category,
+        pattern: Some(pattern.to_string()),
+        category_type: Some(cat_type),
+        description,
+        created_at: None,
     }
 }
 
-fn default_categories_with_policies() -> Vec<(Category, ProtectionLevel)> {
+fn default_categories_with_policies() -> Vec<(Scope, ProtectionLevel)> {
     DEFAULT_CATEGORIES
         .iter()
         .map(|(name, pattern, cat_type, level, desc)| {
+            let ct: CategoryType = cat_type.parse().expect("invalid default category type");
             (
-                category_from_default(name, pattern, cat_type, desc),
+                make_category_scope(name, pattern, ct, Some(desc.to_string())),
                 level.parse().expect("invalid default protection level"),
             )
         })
@@ -270,10 +278,11 @@ pub fn run_init_workspace(
 
     if !no_categories {
         for (name, pattern, cat_type, level, desc) in DEFAULT_CATEGORIES {
-            let cat = category_from_default(name, pattern, cat_type, desc);
-            let cat_id = ws_db.insert_default_category(&cat)?;
+            let ct: CategoryType = cat_type.parse().expect("invalid default category type");
+            let scope = make_category_scope(name, pattern, ct, Some(desc.to_string()));
+            let scope_id = ws_db.insert_default_category(&scope)?;
             ws_db.insert_default_category_policy(
-                cat_id,
+                scope_id,
                 &level.parse().expect("invalid default protection level"),
             )?;
         }
