@@ -32,25 +32,6 @@ pub enum ScopeToolConfig {
     Quiet,
 }
 
-// Legacy — kept for migration only
-#[derive(Iden)]
-pub enum Categories {
-    Table,
-    Id,
-    Name,
-    Pattern,
-    CategoryType,
-    Description,
-}
-
-#[derive(Iden)]
-pub enum CategoryPolicy {
-    Table,
-    Id,
-    CategoryId,
-    ProtectionLevel,
-}
-
 #[derive(Clone, Copy, Iden)]
 pub enum Files {
     Table,
@@ -84,62 +65,10 @@ pub enum AuditLog {
 }
 
 #[derive(Iden)]
-pub enum ToolConfig {
-    Table,
-    Id,
-    Scope,
-    Action,
-    FileType,
-    Command,
-    Env,
-    Quiet,
-}
-
-#[derive(Iden)]
-pub enum TagToolConfig {
-    Table,
-    Id,
-    Tag,
-    Action,
-    FileType,
-    Command,
-    Env,
-    Quiet,
-}
-
-#[derive(Iden)]
 pub enum WorkspaceConfig {
     Table,
     Key,
     Value,
-}
-
-#[derive(Iden)]
-pub enum Projects {
-    Table,
-    Id,
-    Name,
-    Path,
-    Description,
-    CreatedAt,
-}
-
-#[derive(Iden)]
-pub enum DefaultCategories {
-    Table,
-    Id,
-    Name,
-    Pattern,
-    CategoryType,
-    Description,
-}
-
-#[derive(Iden)]
-pub enum DefaultCategoryPolicy {
-    Table,
-    Id,
-    DefaultCategoryId,
-    ProtectionLevel,
 }
 
 #[derive(Iden)]
