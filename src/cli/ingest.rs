@@ -4,9 +4,10 @@ use anyhow::Result;
 use chrono::Utc;
 
 use crate::context::{discover, Context};
-use crate::db::WorkspaceDb;
+use crate::db::materialize::{self, FileContext};
+use crate::db::{ProjectDb, WorkspaceDb};
 use crate::integrity;
-use crate::models::{ProtectionLevel, TrackedFile, TriggerEvent};
+use crate::models::{ProtectionLevel, Scope, TrackedFile, TriggerEvent};
 use crate::reference::format_ref;
 use crate::rules::RuleEvent;
 use crate::util::whoami;
@@ -22,6 +23,7 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
         }
     }
 
+    let categories = project_db.list_categories()?;
     let patterns = walk::category_patterns(project_db, scope)?;
     let entries = walk::walk_and_collect(project_root, &patterns)?;
 
@@ -36,30 +38,15 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
         let file_id = track_file(project_db, &abs_path, rel_path)?;
         count += 1;
 
-        if let Ok(Some(file)) = project_db.get_file_by_hash(&hash) {
-            let protection = project_db
-                .resolve_protection(rel_path)
-                .unwrap_or(ProtectionLevel::Editable);
-            let is_immutable = integrity::is_immutable(&abs_path).unwrap_or(false);
-            let ref_str = format_ref(rel_path, ctx.project_name(), project_db);
-            eprintln!(
-                "  {ref_str} [{}]",
-                protection_label(project_root, &abs_path, protection, is_immutable)
-            );
-
-            let event = RuleEvent {
-                event: TriggerEvent::Ingest,
-                file: Some(&file),
-                file_id: Some(file_id),
-                rel_path: Some(rel_path),
-                tag_name: None,
-                target_category: None,
-                pipeline_name: None,
-                sign_name: None,
-                new_state: None,
-            };
-            crate::rules::fire_rules(&ctx, &event);
-        }
+        materialize_for_new_file(project_db, rel_path, &hash, &categories);
+        let evt = IngestResult {
+            project_root,
+            abs_path: &abs_path,
+            rel_path,
+            hash: &hash,
+            file_id,
+        };
+        report_and_fire_rules(&ctx, project_db, &evt);
     }
 
     if count == 0 {
@@ -69,6 +56,58 @@ pub fn run(cwd: &Path, scope: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn materialize_for_new_file(db: &ProjectDb, rel_path: &str, sha256: &str, categories: &[Scope]) {
+    let matching_cats: Vec<_> = categories
+        .iter()
+        .filter(|cat| cat.matches(rel_path).unwrap_or(false))
+        .cloned()
+        .collect();
+    let file_ctx = FileContext {
+        rel_path,
+        sha256,
+        matching_categories: &matching_cats,
+        tags: &[],
+    };
+    let _ = materialize::materialize_pipelines_for_file(db, &file_ctx);
+}
+
+struct IngestResult<'a> {
+    project_root: &'a Path,
+    abs_path: &'a Path,
+    rel_path: &'a str,
+    hash: &'a str,
+    file_id: i64,
+}
+
+fn report_and_fire_rules(ctx: &Context, project_db: &ProjectDb, evt: &IngestResult<'_>) {
+    let Ok(Some(file)) = project_db.get_file_by_hash(evt.hash) else {
+        return;
+    };
+
+    let protection = project_db
+        .resolve_protection(evt.rel_path)
+        .unwrap_or(ProtectionLevel::Editable);
+    let is_immutable = integrity::is_immutable(evt.abs_path).unwrap_or(false);
+    let ref_str = format_ref(evt.rel_path, ctx.project_name(), project_db);
+    eprintln!(
+        "  {ref_str} [{}]",
+        protection_label(evt.project_root, evt.abs_path, protection, is_immutable)
+    );
+
+    let event = RuleEvent {
+        event: TriggerEvent::Ingest,
+        file: Some(&file),
+        file_id: Some(evt.file_id),
+        rel_path: Some(evt.rel_path),
+        tag_name: None,
+        target_category: None,
+        pipeline_name: None,
+        sign_name: None,
+        new_state: None,
+    };
+    crate::rules::fire_rules(ctx, &event);
 }
 
 pub fn workspace_from_ctx(ctx: &Context) -> (Option<&Path>, Option<&WorkspaceDb>) {
@@ -84,7 +123,7 @@ pub fn workspace_from_ctx(ctx: &Context) -> (Option<&Path>, Option<&WorkspaceDb>
 }
 
 /// Track a file that already exists on disk inside the project.
-pub fn track_file(db: &crate::db::ProjectDb, abs_path: &Path, rel_path: &str) -> Result<i64> {
+pub fn track_file(db: &ProjectDb, abs_path: &Path, rel_path: &str) -> Result<i64> {
     let (hash, fingerprint) = integrity::hash_and_fingerprint(abs_path)?;
     let meta = std::fs::metadata(abs_path)?;
     let size = meta.len();

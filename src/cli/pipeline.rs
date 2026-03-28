@@ -99,17 +99,25 @@ pub fn run_attach(
     tag: Option<&str>,
 ) -> Result<()> {
     let ctx = discover(cwd)?;
-    let (_, project_db) = ctx.require_project()?;
+    let (project_root, project_db) = ctx.require_project()?;
 
-    let (scope_type, scope_value) = resolve_scope_args(category, tag)?;
+    let reference = build_reference(category, tag)?;
 
     let pipeline = project_db
         .get_pipeline_by_name(pipeline_name)?
         .ok_or_else(|| anyhow::anyhow!("pipeline '{pipeline_name}' not found"))?;
+    let pipeline_id = pipeline.id.unwrap();
 
-    project_db.attach_pipeline(pipeline.id.unwrap(), scope_type, scope_value)?;
-    eprintln!("Attached pipeline '{pipeline_name}' to {scope_type} '{scope_value}'");
+    // Also create legacy attachment for backwards compat during migration
+    let (scope_type, scope_value) = resolve_scope_args(category, tag)?;
+    let _ = project_db.attach_pipeline(pipeline_id, scope_type, scope_value);
 
+    let sub_id = project_db.subscribe_pipeline(pipeline_id, &reference)?;
+
+    // Materialize against all tracked files
+    crate::db::materialize::rematerialize_all_pipelines(project_db, project_root)?;
+
+    eprintln!("Attached pipeline '{pipeline_name}' to '{reference}' (subscription {sub_id})");
     Ok(())
 }
 
@@ -122,19 +130,33 @@ pub fn run_detach(
     let ctx = discover(cwd)?;
     let (_, project_db) = ctx.require_project()?;
 
-    let (scope_type, scope_value) = resolve_scope_args(category, tag)?;
+    let reference = build_reference(category, tag)?;
 
     let pipeline = project_db
         .get_pipeline_by_name(pipeline_name)?
         .ok_or_else(|| anyhow::anyhow!("pipeline '{pipeline_name}' not found"))?;
+    let pipeline_id = pipeline.id.unwrap();
 
-    let count = project_db.detach_pipeline(pipeline.id.unwrap(), scope_type, scope_value)?;
+    let count = project_db.unsubscribe_pipeline(pipeline_id, &reference)?;
     if count == 0 {
-        bail!("pipeline '{pipeline_name}' is not attached to {scope_type} '{scope_value}'");
+        bail!("pipeline '{pipeline_name}' has no subscription for '{reference}'");
     }
-    eprintln!("Detached pipeline '{pipeline_name}' from {scope_type} '{scope_value}'");
 
+    // Also remove legacy attachment
+    let (scope_type, scope_value) = resolve_scope_args(category, tag)?;
+    let _ = project_db.detach_pipeline(pipeline_id, scope_type, scope_value);
+
+    eprintln!("Detached pipeline '{pipeline_name}' from '{reference}'");
     Ok(())
+}
+
+fn build_reference(category: Option<&str>, tag: Option<&str>) -> Result<String> {
+    match (category, tag) {
+        (Some(cat), None) => Ok(cat.to_string()),
+        (None, Some(t)) => Ok(format!("!{t}")),
+        (Some(cat), Some(t)) => Ok(format!("{cat}!{t}")),
+        (None, None) => bail!("specify --category or --tag"),
+    }
 }
 
 fn resolve_scope_args<'a>(
