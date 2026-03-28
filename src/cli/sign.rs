@@ -8,7 +8,7 @@ use console::style;
 use crate::context::{discover, Context};
 use crate::db::ProjectDb;
 use crate::integrity;
-use crate::models::{Pipeline, Scope, Sign, TrackedFile, TriggerEvent};
+use crate::models::{Pipeline, Sign, TrackedFile, TriggerEvent};
 use crate::pipeline::state::{derive_file_state, FileState};
 use crate::reference::{format_ref, parse_reference, resolve_file_ref, resolve_references};
 use crate::rules::RuleEvent;
@@ -28,9 +28,7 @@ pub fn run_sign(
 
     let current_hash = compute_file_hash(project_root, &resolved.rel_path, true)?;
 
-    let categories = project_db.list_categories()?;
-    let pipelines =
-        resolve_file_pipelines(project_db, file_id, &resolved.rel_path, &categories, None)?;
+    let pipelines = resolve_file_pipelines(project_db, &current_hash, None)?;
 
     let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &resolved.rel_path)?;
     let pipeline_id = pipeline.id.unwrap();
@@ -93,9 +91,7 @@ pub fn run_unsign(
 
     let (resolved, file_id) = resolve_file_ref(reference, &ctx)?;
 
-    let categories = project_db.list_categories()?;
-    let pipelines =
-        resolve_file_pipelines(project_db, file_id, &resolved.rel_path, &categories, None)?;
+    let pipelines = resolve_file_pipelines(project_db, &resolved.file.sha256, None)?;
 
     let pipeline = resolve_single_pipeline(&pipelines, pipeline_name, &resolved.rel_path)?;
     let pipeline_id = pipeline.id.unwrap();
@@ -172,17 +168,10 @@ pub fn run_state(cwd: &Path, references: &[String], pipeline_name: Option<&str>)
     let ctx = discover(cwd)?;
     let (project_root, project_db) = ctx.require_project()?;
     let entries = resolve_files_with_ids(references, &ctx, project_db)?;
-    let categories = project_db.list_categories()?;
     let mut any_state = false;
 
     for entry in &entries {
-        let pipelines = resolve_file_pipelines(
-            project_db,
-            entry.file_id,
-            &entry.rel_path,
-            &categories,
-            pipeline_name,
-        )?;
+        let pipelines = resolve_file_pipelines(project_db, &entry.file.sha256, pipeline_name)?;
 
         if pipelines.is_empty() {
             continue;
@@ -244,13 +233,23 @@ fn resolve_files_with_ids(
 
 fn resolve_file_pipelines(
     project_db: &ProjectDb,
-    file_id: i64,
-    rel_path: &str,
-    categories: &[Scope],
+    sha256: &str,
     pipeline_name: Option<&str>,
 ) -> Result<Vec<Pipeline>> {
-    let tags = project_db.get_tags(file_id)?;
-    let mut pipelines = project_db.get_pipelines_for_file(file_id, rel_path, categories, &tags)?;
+    let mut pipelines = project_db.get_pipelines_for_sha256(sha256)?;
+    if pipelines.is_empty() {
+        // Fall back to legacy attachment lookup during migration
+        let file = project_db.get_file_by_hash(sha256)?;
+        if let Some(ref f) = file {
+            if let Some(file_id) = f.id {
+                let categories = project_db.list_categories()?;
+                let tags = project_db.get_tags(file_id)?;
+                let rel_path = f.path.as_deref().unwrap_or("");
+                pipelines =
+                    project_db.get_pipelines_for_file(file_id, rel_path, &categories, &tags)?;
+            }
+        }
+    }
     if let Some(name) = pipeline_name {
         pipelines.retain(|p| p.name == name);
     }
