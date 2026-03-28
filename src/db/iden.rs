@@ -95,6 +95,62 @@ pub enum Pipelines {
 }
 
 #[derive(Iden)]
+pub enum PipelineSubscriptions {
+    Table,
+    Id,
+    PipelineId,
+    Reference,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+pub enum PipelineFiles {
+    Table,
+    PipelineId,
+    Sha256,
+    SubscriptionId,
+    AttachedAt,
+}
+
+#[derive(Iden)]
+pub enum Rulesets {
+    Table,
+    Id,
+    Name,
+    Description,
+}
+
+#[derive(Iden)]
+pub enum RulesetRules {
+    Table,
+    Id,
+    RulesetId,
+    Priority,
+    Condition,
+    ActionType,
+    ActionConfig,
+}
+
+#[derive(Iden)]
+pub enum RulesetSubscriptions {
+    Table,
+    Id,
+    RulesetId,
+    Reference,
+    CreatedAt,
+}
+
+#[derive(Iden)]
+pub enum RulesetFiles {
+    Table,
+    RulesetId,
+    Sha256,
+    SubscriptionId,
+    AttachedAt,
+}
+
+// Legacy — kept for migration only
+#[derive(Iden)]
 pub enum PipelineAttachments {
     Table,
     Id,

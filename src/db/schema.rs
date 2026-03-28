@@ -108,6 +108,22 @@ CREATE TABLE IF NOT EXISTS pipeline_attachments (
     UNIQUE(pipeline_id, scope_type, scope_value)
 );
 
+CREATE TABLE IF NOT EXISTS pipeline_subscriptions (
+    id INTEGER PRIMARY KEY,
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
+    reference TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(pipeline_id, reference)
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_files (
+    pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
+    sha256 TEXT NOT NULL,
+    subscription_id INTEGER NOT NULL REFERENCES pipeline_subscriptions(id),
+    attached_at TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, sha256)
+);
+
 CREATE TABLE IF NOT EXISTS signs (
     id INTEGER PRIMARY KEY,
     pipeline_id INTEGER NOT NULL REFERENCES pipelines(id),
@@ -118,6 +134,40 @@ CREATE TABLE IF NOT EXISTS signs (
     signed_at TEXT NOT NULL,
     signature TEXT,
     revoked_at TEXT
+);
+";
+
+pub(super) const RULESET_TABLES_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS rulesets (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ruleset_rules (
+    id INTEGER PRIMARY KEY,
+    ruleset_id INTEGER NOT NULL REFERENCES rulesets(id),
+    priority INTEGER NOT NULL DEFAULT 0,
+    condition TEXT,
+    action_type TEXT NOT NULL,
+    action_config TEXT NOT NULL,
+    UNIQUE(ruleset_id, priority)
+);
+
+CREATE TABLE IF NOT EXISTS ruleset_subscriptions (
+    id INTEGER PRIMARY KEY,
+    ruleset_id INTEGER NOT NULL REFERENCES rulesets(id),
+    reference TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(ruleset_id, reference)
+);
+
+CREATE TABLE IF NOT EXISTS ruleset_files (
+    ruleset_id INTEGER NOT NULL REFERENCES rulesets(id),
+    sha256 TEXT NOT NULL,
+    subscription_id INTEGER NOT NULL REFERENCES ruleset_subscriptions(id),
+    attached_at TEXT NOT NULL,
+    PRIMARY KEY (ruleset_id, sha256)
 );
 ";
 
@@ -162,7 +212,7 @@ CREATE TABLE IF NOT EXISTS entity_links (
 use std::sync::LazyLock;
 
 pub static PROJECT_SCHEMA: LazyLock<String> = LazyLock::new(|| {
-    format!("{SCOPE_TABLES_SCHEMA}{PROJECT_SCHEMA_PREFIX}{PIPELINE_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}")
+    format!("{SCOPE_TABLES_SCHEMA}{PROJECT_SCHEMA_PREFIX}{PIPELINE_TABLES_SCHEMA}{RULESET_TABLES_SCHEMA}{PROJECT_SCHEMA_SUFFIX}")
 });
 
 pub static WORKSPACE_SCHEMA: LazyLock<String> = LazyLock::new(|| {
