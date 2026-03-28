@@ -3,9 +3,11 @@ use rusqlite::Connection;
 use sea_query::{Asterisk, Expr, ExprTrait, Func, Order, Query, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
 
-use crate::models::{AttachmentScope, Pipeline, PipelineAttachment, Sign};
+use crate::models::{AttachmentScope, Pipeline, PipelineAttachment, Sign, Subscription};
 
-use super::iden::{DefaultPipelines, PipelineAttachments, Pipelines, Signs};
+use super::iden::{
+    DefaultPipelines, PipelineAttachments, PipelineFiles, PipelineSubscriptions, Pipelines, Signs,
+};
 
 pub fn insert_pipeline(conn: &Connection, pipeline: &Pipeline) -> Result<i64> {
     let states_json = serde_json::to_string(&pipeline.states)?;
@@ -228,6 +230,167 @@ fn collect_pipeline_ids_for_scope(
     }
 
     Ok(ids)
+}
+
+// --- Subscription-based pipeline attachments ---
+
+pub fn subscribe_pipeline(conn: &Connection, pipeline_id: i64, reference: &str) -> Result<i64> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let (sql, values) = Query::insert()
+        .into_table(PipelineSubscriptions::Table)
+        .columns([
+            PipelineSubscriptions::PipelineId,
+            PipelineSubscriptions::Reference,
+            PipelineSubscriptions::CreatedAt,
+        ])
+        .values_panic([pipeline_id.into(), reference.into(), now.into()])
+        .build_rusqlite(SqliteQueryBuilder);
+    conn.execute(&sql, &*values.as_params())?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn unsubscribe_pipeline(conn: &Connection, pipeline_id: i64, reference: &str) -> Result<u64> {
+    // Find the subscription id first to cascade delete materialized rows
+    let (sql, values) = Query::select()
+        .column(PipelineSubscriptions::Id)
+        .from(PipelineSubscriptions::Table)
+        .and_where(Expr::col(PipelineSubscriptions::PipelineId).eq(pipeline_id))
+        .and_where(Expr::col(PipelineSubscriptions::Reference).eq(reference))
+        .build_rusqlite(SqliteQueryBuilder);
+    let mut stmt = conn.prepare(&sql)?;
+    let sub_id: Option<i64> = stmt
+        .query_map(&*values.as_params(), |row| row.get(0))?
+        .next()
+        .transpose()?;
+
+    let Some(sub_id) = sub_id else {
+        return Ok(0);
+    };
+
+    // Delete materialized rows
+    let (sql, values) = Query::delete()
+        .from_table(PipelineFiles::Table)
+        .and_where(Expr::col(PipelineFiles::SubscriptionId).eq(sub_id))
+        .build_rusqlite(SqliteQueryBuilder);
+    conn.execute(&sql, &*values.as_params())?;
+
+    // Delete subscription
+    let (sql, values) = Query::delete()
+        .from_table(PipelineSubscriptions::Table)
+        .and_where(Expr::col(PipelineSubscriptions::Id).eq(sub_id))
+        .build_rusqlite(SqliteQueryBuilder);
+    let count = conn.execute(&sql, &*values.as_params())?;
+    Ok(count as u64)
+}
+
+pub fn list_pipeline_subscriptions(
+    conn: &Connection,
+    pipeline_id: i64,
+) -> Result<Vec<Subscription>> {
+    let (sql, values) = Query::select()
+        .columns([
+            PipelineSubscriptions::Id,
+            PipelineSubscriptions::Reference,
+            PipelineSubscriptions::CreatedAt,
+        ])
+        .from(PipelineSubscriptions::Table)
+        .and_where(Expr::col(PipelineSubscriptions::PipelineId).eq(pipeline_id))
+        .order_by(PipelineSubscriptions::Reference, Order::Asc)
+        .build_rusqlite(SqliteQueryBuilder);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(&*values.as_params(), |row| {
+        Ok(Subscription {
+            id: Some(row.get(0)?),
+            reference: row.get(1)?,
+            created_at: row.get(2)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn materialize_pipeline_file(
+    conn: &Connection,
+    pipeline_id: i64,
+    sha256: &str,
+    subscription_id: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let (sql, values) = Query::insert()
+        .into_table(PipelineFiles::Table)
+        .columns([
+            PipelineFiles::PipelineId,
+            PipelineFiles::Sha256,
+            PipelineFiles::SubscriptionId,
+            PipelineFiles::AttachedAt,
+        ])
+        .values_panic([
+            pipeline_id.into(),
+            sha256.into(),
+            subscription_id.into(),
+            now.into(),
+        ])
+        .on_conflict(
+            sea_query::OnConflict::columns([PipelineFiles::PipelineId, PipelineFiles::Sha256])
+                .do_nothing()
+                .to_owned(),
+        )
+        .build_rusqlite(SqliteQueryBuilder);
+    conn.execute(&sql, &*values.as_params())?;
+    Ok(())
+}
+
+pub fn dematerialize_pipeline_file(
+    conn: &Connection,
+    pipeline_id: i64,
+    sha256: &str,
+) -> Result<u64> {
+    let (sql, values) = Query::delete()
+        .from_table(PipelineFiles::Table)
+        .and_where(Expr::col(PipelineFiles::PipelineId).eq(pipeline_id))
+        .and_where(Expr::col(PipelineFiles::Sha256).eq(sha256))
+        .build_rusqlite(SqliteQueryBuilder);
+    let count = conn.execute(&sql, &*values.as_params())?;
+    Ok(count as u64)
+}
+
+pub fn get_pipelines_for_sha256(conn: &Connection, sha256: &str) -> Result<Vec<Pipeline>> {
+    let (sql, values) = Query::select()
+        .columns(PIPELINE_COLUMNS.map(|c| (Pipelines::Table, c)))
+        .from(Pipelines::Table)
+        .inner_join(
+            PipelineFiles::Table,
+            Expr::col((PipelineFiles::Table, PipelineFiles::PipelineId))
+                .equals((Pipelines::Table, Pipelines::Id)),
+        )
+        .and_where(Expr::col((PipelineFiles::Table, PipelineFiles::Sha256)).eq(sha256))
+        .build_rusqlite(SqliteQueryBuilder);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(&*values.as_params(), row_to_pipeline)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn list_all_pipeline_subscriptions(conn: &Connection) -> Result<Vec<(i64, Subscription)>> {
+    let (sql, values) = Query::select()
+        .columns([
+            PipelineSubscriptions::PipelineId,
+            PipelineSubscriptions::Id,
+            PipelineSubscriptions::Reference,
+            PipelineSubscriptions::CreatedAt,
+        ])
+        .from(PipelineSubscriptions::Table)
+        .build_rusqlite(SqliteQueryBuilder);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(&*values.as_params(), |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            Subscription {
+                id: Some(row.get(1)?),
+                reference: row.get(2)?,
+                created_at: row.get(3)?,
+            },
+        ))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 pub fn insert_sign(conn: &Connection, sign: &Sign) -> Result<i64> {
@@ -831,5 +994,105 @@ mod tests {
             .get_pipelines_for_file(1, "evidence/doc.pdf", &[scope], &tags)
             .unwrap();
         assert_eq!(pipelines.len(), 1);
+    }
+
+    #[test]
+    fn subscription_crud() {
+        let (_dir, db) = setup();
+        let p = make_pipeline("review", &["draft", "done"]);
+        let pid = db.insert_pipeline(&p).unwrap();
+
+        let sub_id = db.subscribe_pipeline(pid, ":evidence").unwrap();
+        assert!(sub_id > 0);
+
+        let subs = db.list_pipeline_subscriptions(pid).unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].reference, ":evidence");
+
+        let removed = db.unsubscribe_pipeline(pid, ":evidence").unwrap();
+        assert_eq!(removed, 1);
+
+        let subs = db.list_pipeline_subscriptions(pid).unwrap();
+        assert!(subs.is_empty());
+    }
+
+    #[test]
+    fn subscription_duplicate_rejected() {
+        let (_dir, db) = setup();
+        let p = make_pipeline("review", &["draft", "done"]);
+        let pid = db.insert_pipeline(&p).unwrap();
+
+        db.subscribe_pipeline(pid, ":evidence").unwrap();
+        assert!(db.subscribe_pipeline(pid, ":evidence").is_err());
+    }
+
+    #[test]
+    fn materialize_and_query_by_hash() {
+        let (_dir, db) = setup();
+        let p = make_pipeline("review", &["draft", "done"]);
+        let pid = db.insert_pipeline(&p).unwrap();
+        let sub_id = db.subscribe_pipeline(pid, ":evidence").unwrap();
+
+        db.materialize_pipeline_file(pid, "abc123hash", sub_id)
+            .unwrap();
+
+        let pipelines = db.get_pipelines_for_sha256("abc123hash").unwrap();
+        assert_eq!(pipelines.len(), 1);
+        assert_eq!(pipelines[0].name, "review");
+
+        let none = db.get_pipelines_for_sha256("other_hash").unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn materialize_dedup_ignores_duplicate() {
+        let (_dir, db) = setup();
+        let p = make_pipeline("review", &["draft", "done"]);
+        let pid = db.insert_pipeline(&p).unwrap();
+        let sub_id = db.subscribe_pipeline(pid, ":evidence").unwrap();
+
+        db.materialize_pipeline_file(pid, "abc123hash", sub_id)
+            .unwrap();
+        db.materialize_pipeline_file(pid, "abc123hash", sub_id)
+            .unwrap();
+
+        let pipelines = db.get_pipelines_for_sha256("abc123hash").unwrap();
+        assert_eq!(pipelines.len(), 1);
+    }
+
+    #[test]
+    fn unsubscribe_cascades_materialized_rows() {
+        let (_dir, db) = setup();
+        let p = make_pipeline("review", &["draft", "done"]);
+        let pid = db.insert_pipeline(&p).unwrap();
+        let sub_id = db.subscribe_pipeline(pid, ":evidence").unwrap();
+
+        db.materialize_pipeline_file(pid, "hash1", sub_id).unwrap();
+        db.materialize_pipeline_file(pid, "hash2", sub_id).unwrap();
+
+        db.unsubscribe_pipeline(pid, ":evidence").unwrap();
+
+        let pipelines = db.get_pipelines_for_sha256("hash1").unwrap();
+        assert!(pipelines.is_empty());
+    }
+
+    #[test]
+    fn multiple_pipelines_for_same_hash() {
+        let (_dir, db) = setup();
+        let p1 = make_pipeline("review", &["draft", "done"]);
+        let p2 = make_pipeline("classification", &["unclassified", "classified"]);
+        let pid1 = db.insert_pipeline(&p1).unwrap();
+        let pid2 = db.insert_pipeline(&p2).unwrap();
+
+        let sub1 = db.subscribe_pipeline(pid1, ":evidence").unwrap();
+        let sub2 = db.subscribe_pipeline(pid2, "!classified").unwrap();
+
+        db.materialize_pipeline_file(pid1, "shared_hash", sub1)
+            .unwrap();
+        db.materialize_pipeline_file(pid2, "shared_hash", sub2)
+            .unwrap();
+
+        let pipelines = db.get_pipelines_for_sha256("shared_hash").unwrap();
+        assert_eq!(pipelines.len(), 2);
     }
 }

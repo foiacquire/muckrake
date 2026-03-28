@@ -936,6 +936,42 @@ impl ProjectDb {
         super::pipeline::get_pipelines_for_file(&self.conn, file_id, rel_path, categories, tags)
     }
 
+    // --- Subscription-based pipeline attachments ---
+
+    pub fn subscribe_pipeline(&self, pipeline_id: i64, reference: &str) -> Result<i64> {
+        super::pipeline::subscribe_pipeline(&self.conn, pipeline_id, reference)
+    }
+
+    pub fn unsubscribe_pipeline(&self, pipeline_id: i64, reference: &str) -> Result<u64> {
+        super::pipeline::unsubscribe_pipeline(&self.conn, pipeline_id, reference)
+    }
+
+    pub fn list_pipeline_subscriptions(
+        &self,
+        pipeline_id: i64,
+    ) -> Result<Vec<crate::models::Subscription>> {
+        super::pipeline::list_pipeline_subscriptions(&self.conn, pipeline_id)
+    }
+
+    pub fn materialize_pipeline_file(
+        &self,
+        pipeline_id: i64,
+        sha256: &str,
+        subscription_id: i64,
+    ) -> Result<()> {
+        super::pipeline::materialize_pipeline_file(&self.conn, pipeline_id, sha256, subscription_id)
+    }
+
+    pub fn get_pipelines_for_sha256(&self, sha256: &str) -> Result<Vec<Pipeline>> {
+        super::pipeline::get_pipelines_for_sha256(&self.conn, sha256)
+    }
+
+    pub fn list_all_pipeline_subscriptions(
+        &self,
+    ) -> Result<Vec<(i64, crate::models::Subscription)>> {
+        super::pipeline::list_all_pipeline_subscriptions(&self.conn)
+    }
+
     pub fn insert_sign(&self, sign: &Sign) -> Result<i64> {
         super::pipeline::insert_sign(&self.conn, sign)
     }
