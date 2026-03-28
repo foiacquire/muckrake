@@ -23,6 +23,10 @@ pub struct ProjectDb {
 }
 
 impl ProjectDb {
+    pub(crate) const fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     pub fn create(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to create project db at {}", path.display()))?;

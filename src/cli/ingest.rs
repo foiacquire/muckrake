@@ -70,7 +70,7 @@ fn materialize_for_new_file(db: &ProjectDb, rel_path: &str, sha256: &str, catego
         matching_categories: &matching_cats,
         tags: &[],
     };
-    let _ = materialize::materialize_pipelines_for_file(db, &file_ctx);
+    let _ = materialize::materialize_all_for_file(db, &file_ctx);
 }
 
 struct IngestResult<'a> {

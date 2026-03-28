@@ -81,6 +81,28 @@ pub fn materialize_pipelines_for_file(db: &ProjectDb, file: &FileContext<'_>) ->
     Ok(())
 }
 
+/// Materialize all ruleset subscriptions for a single file.
+pub fn materialize_rulesets_for_file(db: &ProjectDb, file: &FileContext<'_>) -> Result<()> {
+    let subscriptions = super::ruleset::list_all_ruleset_subscriptions(db.conn())?;
+    for (ruleset_id, sub) in &subscriptions {
+        let Ok(reference) = parse_reference(&sub.reference) else {
+            continue;
+        };
+        if file_matches_reference(file, &reference) {
+            let sub_id = sub.id.unwrap_or(0);
+            super::ruleset::materialize_ruleset_file(db.conn(), *ruleset_id, file.sha256, sub_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// Materialize all subscriptions (pipelines + rulesets) for a single file.
+pub fn materialize_all_for_file(db: &ProjectDb, file: &FileContext<'_>) -> Result<()> {
+    materialize_pipelines_for_file(db, file)?;
+    materialize_rulesets_for_file(db, file)?;
+    Ok(())
+}
+
 /// Full rematerialization: resolve all subscriptions against all known files.
 /// Requires a filesystem walk to discover paths. Call from `mkrk ingest` or
 /// `mkrk pipeline rematerialize`.

@@ -3,6 +3,7 @@ mod iden;
 pub mod materialize;
 pub mod pipeline;
 pub mod project;
+pub mod ruleset;
 mod schema;
 pub mod workspace;
 
