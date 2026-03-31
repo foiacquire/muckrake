@@ -1,6 +1,8 @@
 pub mod engine;
+pub mod evaluate;
 
 pub use engine::{evaluate_rules, RuleContext, RuleEvent};
+pub use evaluate::{evaluate_for_file, resolve_protection_by_hash, EvalContext, EvaluationResult};
 
 use std::collections::HashSet;
 
