@@ -448,11 +448,13 @@ fn print_chunk_diff(abs_path: &Path, fingerprint: Option<&str>) {
 
 fn check_immutable_flag(
     vctx: &VerifyCtx<'_>,
-    _file: &TrackedFile,
+    file: &TrackedFile,
     file_path: &Path,
     rel_path: &str,
 ) -> Result<u32> {
-    let expected = vctx.db.resolve_protection(rel_path)?;
+    let expected = vctx
+        .db
+        .resolve_protection_for_file(&file.sha256, rel_path)?;
     let is_immutable = file_path.exists() && integrity::is_immutable(file_path).unwrap_or(false);
 
     if expected == ProtectionLevel::Immutable {

@@ -37,7 +37,7 @@ fn run_open(cwd: &Path, reference: &str, action: &str) -> Result<()> {
         bail!("file missing from disk: {rel_path}");
     }
 
-    let protection = project_db.resolve_protection(rel_path)?;
+    let protection = project_db.resolve_protection_for_file(&file.sha256, rel_path)?;
 
     if action == "edit" && protection == ProtectionLevel::Immutable {
         bail!("cannot edit immutable file '{file_name}'");

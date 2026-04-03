@@ -238,6 +238,18 @@ impl ProjectDb {
         }
     }
 
+    pub fn resolve_protection_for_file(
+        &self,
+        sha256: &str,
+        rel_path: &str,
+    ) -> Result<ProtectionLevel> {
+        let level = crate::rules::resolve_protection_by_hash(self, sha256)?;
+        if level != ProtectionLevel::Editable {
+            return Ok(level);
+        }
+        self.resolve_protection(rel_path)
+    }
+
     pub fn resolve_protection(&self, rel_path: &str) -> Result<ProtectionLevel> {
         let categories = self.list_categories()?;
         let mut levels = Vec::new();

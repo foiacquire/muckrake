@@ -87,7 +87,7 @@ fn report_and_fire_rules(ctx: &Context, project_db: &ProjectDb, evt: &IngestResu
     };
 
     let protection = project_db
-        .resolve_protection(evt.rel_path)
+        .resolve_protection_for_file(evt.hash, evt.rel_path)
         .unwrap_or(ProtectionLevel::Editable);
     let is_immutable = integrity::is_immutable(evt.abs_path).unwrap_or(false);
     let ref_str = format_ref(evt.rel_path, ctx.project_name(), project_db);
@@ -140,7 +140,7 @@ pub fn track_file(db: &ProjectDb, abs_path: &Path, rel_path: &str) -> Result<i64
         }
     });
 
-    let protection = db.resolve_protection(rel_path)?;
+    let protection = db.resolve_protection_for_file(&hash, rel_path)?;
     try_set_immutable(abs_path, protection);
 
     let provenance = serde_json::json!({
