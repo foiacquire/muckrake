@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"go.foia.dev/muckrake/internal/context"
-	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
 	"go.foia.dev/muckrake/internal/reference"
 	"go.foia.dev/muckrake/internal/walk"
@@ -45,18 +44,7 @@ func listAllFiles(ctx *context.Context) error {
 	}
 
 	for _, relPath := range entries {
-		absPath := filepath.Join(ctx.ProjectRoot, relPath)
-		hash, _ := integrity.HashFile(absPath)
-		f, _ := ctx.ProjectDb.GetFileByHash(hash)
-		prefix := "?"
-		if f != nil {
-			prefix = " "
-		}
-		hashPreview := ""
-		if len(hash) >= 8 {
-			hashPreview = hash[:8]
-		}
-		fmt.Printf("  %s %s  %s\n", prefix, relPath, hashPreview)
+		fmt.Println(relPath)
 	}
 
 	if len(entries) == 0 {
@@ -73,7 +61,7 @@ func listRefFiles(ctx *context.Context, refs []string) error {
 		}
 
 		if ref.Kind == reference.KindBarePath {
-			fmt.Printf("  %s\n", ref.Raw)
+			fmt.Println(ref.Raw)
 			continue
 		}
 
@@ -100,7 +88,7 @@ func listRefFiles(ctx *context.Context, refs []string) error {
 					continue
 				}
 			}
-			fmt.Printf("  %s\n", relPath)
+			fmt.Println(relPath)
 		}
 	}
 	return nil
