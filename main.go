@@ -145,13 +145,14 @@ func workspaceDispatch(c command, args []string) (bool, error) {
 			continue
 		}
 
+		os.Setenv("MKRK_PROJECT", p.Name)
 		if err := c.run(args); err != nil {
 			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
 			lastErr = err
 		}
 	}
 
-	// Restore CWD
+	os.Unsetenv("MKRK_PROJECT")
 	os.Chdir(cwd)
 
 	return true, lastErr

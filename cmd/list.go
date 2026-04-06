@@ -44,7 +44,7 @@ func listAllFiles(ctx *context.Context) error {
 	}
 
 	for _, relPath := range entries {
-		fmt.Println(relPath)
+		fmt.Println(reference.FormatRef(relPath, ctx.ProjectDb))
 	}
 
 	if len(entries) == 0 {
