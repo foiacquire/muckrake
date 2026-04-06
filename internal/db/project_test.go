@@ -10,8 +10,7 @@ import (
 
 func testDb(t *testing.T) *ProjectDb {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := CreateProject(filepath.Join(dir, ".mkrk"))
+	db, err := CreateProject(":memory:")
 	if err != nil {
 		t.Fatalf("create db: %v", err)
 	}

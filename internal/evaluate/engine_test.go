@@ -1,7 +1,6 @@
 package evaluate
 
 import (
-	"path/filepath"
 	"testing"
 
 	"go.foia.dev/muckrake/internal/db"
@@ -10,7 +9,7 @@ import (
 
 func setupDb(t *testing.T) *db.ProjectDb {
 	t.Helper()
-	pdb, err := db.CreateProject(filepath.Join(t.TempDir(), ".mkrk"))
+	pdb, err := db.CreateProject(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
