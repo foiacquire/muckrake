@@ -139,7 +139,6 @@ func workspaceDispatch(c command, args []string) (bool, error) {
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "==> %s\n", p.Name)
 		if err := os.Chdir(projDir); err != nil {
 			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
 			lastErr = err
