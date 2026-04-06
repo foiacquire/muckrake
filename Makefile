@@ -1,7 +1,7 @@
 GO_SRC := $(shell find . -name '*.go' -not -path './bin/*')
 
 bin/mkrk: $(GO_SRC) go.mod go.sum
-	go build -o $@ .
+	CGO_ENABLED=0 go build -o $@ .
 
 test:
 	go test ./...
