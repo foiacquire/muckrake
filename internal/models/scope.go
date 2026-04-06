@@ -14,6 +14,19 @@ const (
 	ScopeTypeProject  ScopeType = "project"
 )
 
+// ValidateScopeName checks that a name contains no reserved characters.
+func ValidateScopeName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name must not be empty")
+	}
+	for _, ch := range []byte{':', '.', '/', '!', '{', '}', ','} {
+		if strings.ContainsRune(name, rune(ch)) {
+			return fmt.Errorf("name '%s' contains reserved character '%c'", name, ch)
+		}
+	}
+	return nil
+}
+
 func ParseScopeType(s string) (ScopeType, error) {
 	switch s {
 	case "category":
@@ -68,8 +81,12 @@ func (s *Scope) Matches(path string) (bool, error) {
 }
 
 // GlobMatch matches a path against a pattern supporting **.
+// "**" matches everything.
 // "evidence/**" matches "evidence/doc.pdf" and "evidence/sub/doc.pdf".
 func GlobMatch(pattern, path string) (bool, error) {
+	if pattern == "**" {
+		return true, nil
+	}
 	if strings.Contains(pattern, "**") {
 		base := strings.TrimSuffix(pattern, "/**")
 		if base == pattern {
