@@ -52,20 +52,54 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 			fmt.Fprintf(os.Stderr, "! %s: %v\n", ref, err)
 			continue
 		}
-		file, _ := ctx.ProjectDb.GetFileByFingerprint(fp.ToJSON())
-		if file == nil {
-			hash, _ := integrity.HashFile(absPath)
-			file, _ = ctx.ProjectDb.GetFileByHash(hash)
-		}
-		if file == nil {
-			fmt.Printf("\033[31m%s\033[0m\n", ref)
-		} else {
+
+		// Exact fingerprint match — file unchanged
+		if file, _ := ctx.ProjectDb.GetFileByFingerprint(fp.ToJSON()); file != nil {
 			fmt.Println(ref)
+			continue
 		}
+
+		// Hash match — tracked but fingerprint stale
+		hash, _ := integrity.HashFile(absPath)
+		if file, _ := ctx.ProjectDb.GetFileByHash(hash); file != nil {
+			fmt.Println(ref)
+			continue
+		}
+
+		// Partial fingerprint match — file was modified
+		if bestMatch := findPartialMatch(ctx, fp); bestMatch != nil {
+			fmt.Printf("\033[33m%s\033[0m\n", ref)
+			continue
+		}
+
+		// No match at all — untracked
+		fmt.Printf("\033[31m%s\033[0m\n", ref)
 	}
 
 	if len(entries) == 0 {
 		fmt.Fprintln(os.Stderr, "(no files)")
+	}
+	return nil
+}
+
+func findPartialMatch(ctx *context.Context, diskFp *integrity.Fingerprint) *models.TrackedFile {
+	allFiles, err := ctx.ProjectDb.ListAllFiles()
+	if err != nil || len(diskFp.Chunks) == 0 {
+		return nil
+	}
+	for _, f := range allFiles {
+		dbFp, err := integrity.FingerprintFromJSON(f.Fingerprint)
+		if err != nil || len(dbFp.Chunks) == 0 {
+			continue
+		}
+		matching := diskFp.MatchingChunks(dbFp)
+		minLen := len(diskFp.Chunks)
+		if len(dbFp.Chunks) < minLen {
+			minLen = len(dbFp.Chunks)
+		}
+		if minLen > 0 && matching*2 > minLen {
+			return &f
+		}
 	}
 	return nil
 }
