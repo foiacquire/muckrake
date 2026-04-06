@@ -18,7 +18,7 @@ var commands = map[string]command{
 	"init":     {cmd.RunInit, "initialize a project or workspace"},
 	"sync":     {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
 	"status":   {cmd.RunStatus, "show project or file status"},
-	"list":     {cmd.RunList, "show scopes or files (--files)"},
+	"list":     {cmd.RunList, "list files, optionally filtered by reference"},
 	"tag":      {cmd.RunTag, "add or remove tags (--remove)"},
 	"sign":     {cmd.RunSign, "create or revoke pipeline attestations (--remove)"},
 	"pipeline": {cmd.RunPipeline, "create or remove pipelines (--remove)"},
