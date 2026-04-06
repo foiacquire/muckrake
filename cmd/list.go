@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"go.foia.dev/muckrake/internal/context"
+	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
 	"go.foia.dev/muckrake/internal/reference"
 	"go.foia.dev/muckrake/internal/walk"
@@ -41,12 +42,37 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 		return err
 	}
 
+	hasErrors := false
 	for _, relPath := range entries {
-		fmt.Println(reference.FormatRef(relPath, projectName, ctx.ProjectDb))
+		absPath := filepath.Join(ctx.ProjectRoot, relPath)
+		fp, err := integrity.FingerprintFile(absPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "! %s: %v\n", relPath, err)
+			hasErrors = true
+			continue
+		}
+
+		file, _ := ctx.ProjectDb.GetFileByFingerprint(fp.ToJSON())
+		ref := reference.FormatRef(relPath, projectName, ctx.ProjectDb)
+
+		if file == nil {
+			// Try hash fallback for files with stale fingerprints
+			hash, _ := integrity.HashFile(absPath)
+			file, _ = ctx.ProjectDb.GetFileByHash(hash)
+		}
+
+		if file == nil {
+			fmt.Fprintf(os.Stderr, "? %s\n", ref)
+		} else {
+			fmt.Println(ref)
+		}
 	}
 
 	if len(entries) == 0 {
 		fmt.Fprintln(os.Stderr, "(no files)")
+	}
+	if hasErrors {
+		return fmt.Errorf("some files could not be read")
 	}
 	return nil
 }
