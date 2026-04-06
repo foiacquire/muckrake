@@ -76,12 +76,12 @@ func FingerprintFile(path string) (*Fingerprint, error) {
 	buf := make([]byte, chunkSize)
 
 	for {
-		n, err := f.Read(buf)
+		n, err := io.ReadFull(f, buf)
 		if n > 0 {
 			h := blake3.Sum256(buf[:n])
 			chunks = append(chunks, hex.EncodeToString(h[:hashOutputSize]))
 		}
-		if err == io.EOF {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			break
 		}
 		if err != nil {
@@ -106,13 +106,13 @@ func HashAndFingerprint(path string) (string, *Fingerprint, error) {
 	buf := make([]byte, chunkSize)
 
 	for {
-		n, err := f.Read(buf)
+		n, err := io.ReadFull(f, buf)
 		if n > 0 {
 			sha.Write(buf[:n])
 			h := blake3.Sum256(buf[:n])
 			chunks = append(chunks, hex.EncodeToString(h[:hashOutputSize]))
 		}
-		if err == io.EOF {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			break
 		}
 		if err != nil {
