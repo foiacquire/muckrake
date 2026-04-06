@@ -42,37 +42,29 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 		return err
 	}
 
-	hasErrors := false
 	for _, relPath := range entries {
 		absPath := filepath.Join(ctx.ProjectRoot, relPath)
+		ref := reference.FormatRef(relPath, projectName, ctx.ProjectDb)
+		fmt.Println(ref)
+
+		// Fingerprint check — warn on stderr if not tracked
 		fp, err := integrity.FingerprintFile(absPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "! %s: %v\n", relPath, err)
-			hasErrors = true
+			fmt.Fprintf(os.Stderr, "! %s: %v\n", ref, err)
 			continue
 		}
-
 		file, _ := ctx.ProjectDb.GetFileByFingerprint(fp.ToJSON())
-		ref := reference.FormatRef(relPath, projectName, ctx.ProjectDb)
-
 		if file == nil {
-			// Try hash fallback for files with stale fingerprints
 			hash, _ := integrity.HashFile(absPath)
 			file, _ = ctx.ProjectDb.GetFileByHash(hash)
 		}
-
 		if file == nil {
-			fmt.Fprintf(os.Stderr, "? %s\n", ref)
-		} else {
-			fmt.Println(ref)
+			fmt.Fprintf(os.Stderr, "? %s (untracked)\n", ref)
 		}
 	}
 
 	if len(entries) == 0 {
 		fmt.Fprintln(os.Stderr, "(no files)")
-	}
-	if hasErrors {
-		return fmt.Errorf("some files could not be read")
 	}
 	return nil
 }
