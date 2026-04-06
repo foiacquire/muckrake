@@ -18,6 +18,7 @@ var commands = map[string]command{
 	"status": {cmd.RunStatus, "show project or file status"},
 	"list":   {cmd.RunList, "show scopes, pipelines, or files (--files)"},
 	"tag":      {cmd.RunTag, "add or remove tags (--remove)"},
+	"sign":     {cmd.RunSign, "create or revoke pipeline attestations (--remove)"},
 	"pipeline": {cmd.RunPipeline, "create or remove pipelines (--remove)"},
 	"read": {cmd.RunRead, "output file contents to stdout"},
 	"open": {cmd.RunOpen, "open file in $PAGER"},
