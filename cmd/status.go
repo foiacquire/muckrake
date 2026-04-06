@@ -77,7 +77,7 @@ func projectStatus(ctx *context.Context) error {
 
 func fileStatus(ctx *context.Context, refs []string) error {
 	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("must be inside a project")
+		return fmt.Errorf("file status requires project context")
 	}
 
 	for _, rawRef := range refs {

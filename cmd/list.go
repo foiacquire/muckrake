@@ -26,14 +26,37 @@ func RunList(args []string) error {
 	}
 	defer ctx.Close()
 
-	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("must be inside a project")
+	if ctx.Kind == context.ContextNone {
+		return fmt.Errorf("not in a muckrake project or workspace")
+	}
+
+	if ctx.Kind == context.ContextWorkspace {
+		return listWorkspace(ctx)
 	}
 
 	if *files {
 		return listFiles(ctx, fs.Args())
 	}
 	return listScopes(ctx)
+}
+
+func listWorkspace(ctx *context.Context) error {
+	projects, err := ctx.Workspace.Db.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		fmt.Fprintln(os.Stderr, "No projects registered")
+		return nil
+	}
+	for _, p := range projects {
+		desc := ""
+		if p.Description != nil {
+			desc = fmt.Sprintf("  %s", *p.Description)
+		}
+		fmt.Printf("  %-15s %s%s\n", p.Name, p.Path, desc)
+	}
+	return nil
 }
 
 func listScopes(ctx *context.Context) error {

@@ -31,7 +31,7 @@ func RunRead(args []string) error {
 	defer ctx.Close()
 
 	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("must be inside a project")
+		return fmt.Errorf("not in a project (run from a project directory or use sync first)")
 	}
 
 	total := 0
