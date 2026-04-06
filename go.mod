@@ -3,6 +3,7 @@ module go.foia.dev/muckrake
 go 1.25.0
 
 require (
+	golang.org/x/term v0.41.0
 	lukechampine.com/blake3 v1.4.1
 	modernc.org/sqlite v1.48.1
 )

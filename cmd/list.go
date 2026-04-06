@@ -42,6 +42,8 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 		return err
 	}
 
+	allFiles, _ := ctx.ProjectDb.ListAllFiles()
+
 	for _, relPath := range entries {
 		absPath := filepath.Join(ctx.ProjectRoot, relPath)
 		ref := reference.FormatRef(relPath, projectName, ctx.ProjectDb)
@@ -67,7 +69,7 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 		}
 
 		// Partial fingerprint match — file was modified
-		if bestMatch := findPartialMatch(ctx, fp); bestMatch != nil {
+		if match := findPartialMatchFile(allFiles, fp); match != nil {
 			fmt.Printf("\033[33m%s\033[0m\n", ref)
 			continue
 		}
@@ -78,28 +80,6 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 
 	if len(entries) == 0 {
 		fmt.Fprintln(os.Stderr, "(no files)")
-	}
-	return nil
-}
-
-func findPartialMatch(ctx *context.Context, diskFp *integrity.Fingerprint) *models.TrackedFile {
-	allFiles, err := ctx.ProjectDb.ListAllFiles()
-	if err != nil || len(diskFp.Chunks) == 0 {
-		return nil
-	}
-	for _, f := range allFiles {
-		dbFp, err := integrity.FingerprintFromJSON(f.Fingerprint)
-		if err != nil || len(dbFp.Chunks) == 0 {
-			continue
-		}
-		matching := diskFp.MatchingChunks(dbFp)
-		minLen := len(diskFp.Chunks)
-		if len(dbFp.Chunks) < minLen {
-			minLen = len(dbFp.Chunks)
-		}
-		if minLen > 0 && matching*2 > minLen {
-			return &f
-		}
 	}
 	return nil
 }

@@ -279,6 +279,11 @@ func (p *ProjectDb) UpdateFileFingerprint(fileID int64, fp string) error {
 	return err
 }
 
+func (p *ProjectDb) UpdateFileSHA256(fileID int64, sha256 string) error {
+	_, err := p.db.Exec(`UPDATE files SET sha256 = ? WHERE id = ?`, sha256, fileID)
+	return err
+}
+
 // --- Tags ---
 
 func (p *ProjectDb) InsertTag(fileID int64, tag, fileHash, fingerprint string) error {
