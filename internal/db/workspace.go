@@ -150,3 +150,30 @@ func (w *WorkspaceDb) ProjectCount() (int64, error) {
 	err := w.db.QueryRow(`SELECT COUNT(*) FROM scopes WHERE scope_type = 'project'`).Scan(&n)
 	return n, err
 }
+
+// InsertWorkspaceScope inserts a scope into the workspace DB.
+func InsertWorkspaceScope(w *WorkspaceDb, s *models.Scope) (int64, error) {
+	catType := ""
+	if s.CategoryType != nil {
+		catType = string(*s.CategoryType)
+	}
+	res, err := w.db.Exec(
+		`INSERT INTO scopes (name, scope_type, pattern, category_type, description, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		s.Name, string(s.ScopeType), s.Pattern, catType, s.Description, s.CreatedAt,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert workspace scope: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// InsertWorkspaceScopePolicy inserts a policy for a workspace scope.
+func InsertWorkspaceScopePolicy(w *WorkspaceDb, scopeID int64, level models.ProtectionLevel) error {
+	_, err := w.db.Exec(
+		`INSERT INTO scope_policy (scope_id, protection_level) VALUES (?, ?)
+		 ON CONFLICT(scope_id) DO UPDATE SET protection_level = excluded.protection_level`,
+		scopeID, string(level),
+	)
+	return err
+}
