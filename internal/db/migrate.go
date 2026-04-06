@@ -80,8 +80,8 @@ func MigrateProject(d *sql.DB) error {
 	// Verify migration before cleanup
 	oldCats := rowCount(d, "categories")
 	newCats := rowCount(d, "scopes WHERE scope_type = 'category'")
-	if newCats < oldCats {
-		return fmt.Errorf("migration verification failed: %d categories but only %d scopes", oldCats, newCats)
+	if newCats != oldCats {
+		return fmt.Errorf("migration verification failed: %d categories but %d category scopes", oldCats, newCats)
 	}
 
 	// Drop legacy tables
@@ -143,15 +143,15 @@ func MigrateWorkspace(d *sql.DB) error {
 	// Verify migration before cleanup
 	oldProjects := rowCount(d, "projects")
 	newProjects := rowCount(d, "scopes WHERE scope_type = 'project'")
-	if newProjects < oldProjects {
-		return fmt.Errorf("migration verification failed: %d projects but only %d project scopes", oldProjects, newProjects)
+	if newProjects != oldProjects {
+		return fmt.Errorf("migration verification failed: %d projects but %d project scopes", oldProjects, newProjects)
 	}
 
 	if tableExists(d, "default_categories") {
 		oldDefCats := rowCount(d, "default_categories")
 		newDefCats := rowCount(d, "scopes WHERE scope_type = 'category'")
-		if newDefCats < oldDefCats {
-			return fmt.Errorf("migration verification failed: %d default categories but only %d category scopes", oldDefCats, newDefCats)
+		if newDefCats != oldDefCats {
+			return fmt.Errorf("migration verification failed: %d default categories but %d category scopes", oldDefCats, newDefCats)
 		}
 	}
 
