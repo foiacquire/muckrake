@@ -15,6 +15,10 @@ type command struct {
 var commands = map[string]command{
 	"init": {cmd.RunInit, "initialize a project or workspace"},
 	"sync": {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
+	"list": {cmd.RunList, "show scopes, pipelines, or files (--files)"},
+	"read": {cmd.RunRead, "output file contents to stdout"},
+	"open": {cmd.RunOpen, "open file in $PAGER"},
+	"edit": {cmd.RunEdit, "open file in $EDITOR"},
 }
 
 func main() {
