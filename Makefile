@@ -1,5 +1,7 @@
-build:
-	go build -o bin/mkrk .
+GO_SRC := $(shell find . -name '*.go' -not -path './bin/*')
+
+bin/mkrk: $(GO_SRC) go.mod go.sum
+	go build -o $@ .
 
 test:
 	go test ./...
@@ -7,4 +9,4 @@ test:
 clean:
 	rm -rf bin/
 
-.PHONY: build test clean
+.PHONY: test clean
