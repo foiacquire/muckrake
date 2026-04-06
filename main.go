@@ -17,6 +17,7 @@ var commands = map[string]command{
 	"sync": {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
 	"status": {cmd.RunStatus, "show project or file status"},
 	"list":   {cmd.RunList, "show scopes, pipelines, or files (--files)"},
+	"tag":  {cmd.RunTag, "add or remove tags (--remove)"},
 	"read": {cmd.RunRead, "output file contents to stdout"},
 	"open": {cmd.RunOpen, "open file in $PAGER"},
 	"edit": {cmd.RunEdit, "open file in $EDITOR"},
