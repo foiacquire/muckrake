@@ -44,10 +44,22 @@ func RunInit(args []string) error {
 
 func initProject(cwd, name string, noCategories bool) error {
 	projectDir := cwd
+
+	// If inside a workspace and a name is given, resolve via projects_dir
+	ws := findWorkspace(cwd)
 	if name != "" {
-		projectDir = filepath.Join(cwd, name)
 		if err := models.ValidateScopeName(name); err != nil {
 			return err
+		}
+		if ws != nil {
+			projectsDir, _ := ws.db.GetConfig("projects_dir")
+			if projectsDir != nil {
+				projectDir = filepath.Join(ws.root, *projectsDir, name)
+			} else {
+				projectDir = filepath.Join(cwd, name)
+			}
+		} else {
+			projectDir = filepath.Join(cwd, name)
 		}
 	}
 
@@ -86,6 +98,20 @@ func initProject(cwd, name string, noCategories bool) error {
 			catDir := filepath.Join(projectDir, models.NameFromPattern(c.pattern))
 			os.MkdirAll(catDir, 0o755)
 		}
+	}
+
+	// Register in workspace if applicable
+	if ws != nil && name != "" {
+		rel, _ := filepath.Rel(ws.root, projectDir)
+		rel = filepath.ToSlash(rel)
+		existing, _ := ws.db.GetProjectByName(name)
+		if existing == nil {
+			ws.db.RegisterProject(name, rel, nil)
+			fmt.Fprintf(os.Stderr, "  Registered in workspace\n")
+		}
+	}
+	if ws != nil {
+		ws.db.Close()
 	}
 
 	fmt.Fprintf(os.Stderr, "Initialized project in %s\n", projectDir)
@@ -138,6 +164,30 @@ func initWorkspace(cwd, projectsDir string, noCategories bool) error {
 	fmt.Fprintf(os.Stderr, "  Projects directory: %s\n", projectsDir)
 
 	return nil
+}
+
+type workspaceInfo struct {
+	root string
+	db   *db.WorkspaceDb
+}
+
+func findWorkspace(cwd string) *workspaceInfo {
+	dir := cwd
+	for {
+		mksp := filepath.Join(dir, ".mksp")
+		if fileExists(mksp) {
+			wdb, err := db.OpenWorkspace(mksp)
+			if err != nil {
+				return nil
+			}
+			return &workspaceInfo{root: dir, db: wdb}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 func fileExists(path string) bool {

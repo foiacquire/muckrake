@@ -249,3 +249,50 @@ func TestRead(t *testing.T) {
 		t.Fatalf("expected file content, got: %s", stdout)
 	}
 }
+
+// --- Workspace dispatch ---
+
+func TestWorkspaceSyncDispatch(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+	mustMkrk(t, wsDir, "init", "beta")
+
+	createTestFile(t, wsDir, "projects/alpha/evidence/a.txt", "alpha evidence")
+	createTestFile(t, wsDir, "projects/beta/evidence/b.txt", "beta evidence")
+
+	// Sync from workspace root should dispatch to both projects
+	_, stderr := mustMkrk(t, wsDir, "sync")
+	if !strings.Contains(stderr, "alpha") {
+		t.Fatalf("expected alpha in output, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "beta") {
+		t.Fatalf("expected beta in output, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "a.txt") {
+		t.Fatalf("expected a.txt in output, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "b.txt") {
+		t.Fatalf("expected b.txt in output, got: %s", stderr)
+	}
+}
+
+func TestWorkspaceListDispatch(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+
+	createTestFile(t, wsDir, "projects/alpha/evidence/report.txt", "test")
+	mustMkrk(t, filepath.Join(wsDir, "projects/alpha"), "sync")
+
+	// List from workspace root should dispatch to alpha
+	stdout, stderr := mustMkrk(t, wsDir, "list", "--files")
+	combined := stdout + stderr
+	if !strings.Contains(combined, "report.txt") {
+		t.Fatalf("expected report.txt in workspace list, got stdout: %s\nstderr: %s", stdout, stderr)
+	}
+}
