@@ -14,19 +14,12 @@ import (
 	"go.foia.dev/muckrake/internal/walk"
 )
 
-func RunSync(args []string) error {
+func RunSync(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	fs.Parse(args)
 
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-	defer ctx.Close()
-
 	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("not in a project (run from a project directory or use sync first)")
+		return fmt.Errorf("not in a project")
 	}
 
 	categories, err := ctx.ProjectDb.ListCategories()
@@ -61,11 +54,10 @@ func RunSync(args []string) error {
 
 		existing, _ := ctx.ProjectDb.GetFileByHash(hash)
 		if existing == nil {
-			// New file — ingest
 			file := &models.TrackedFile{
 				SHA256:      hash,
 				Fingerprint: fp.ToJSON(),
-				IngestedAt:  now(),
+				IngestedAt:  time.Now().UTC().Format(time.RFC3339),
 			}
 			fileID, err := ctx.ProjectDb.InsertFile(file)
 			if err != nil {
@@ -74,25 +66,21 @@ func RunSync(args []string) error {
 			}
 			_ = fileID
 
-			// Materialize subscriptions
 			matchingCats := matchingCategories(relPath, categories)
 			materialize.MaterializeForFile(ctx.ProjectDb, relPath, hash, matchingCats, nil)
 
 			fmt.Fprintf(os.Stderr, "  + %s\n", relPath)
 			ingested++
 		} else {
-			// Known file — verified
 			fmt.Fprintf(os.Stderr, "  ok %s\n", relPath)
 			verified++
 
-			// Update fingerprint if stale
 			if existing.Fingerprint != fp.ToJSON() && existing.ID != nil {
 				ctx.ProjectDb.UpdateFileFingerprint(*existing.ID, fp.ToJSON())
 			}
 		}
 	}
 
-	// Check for missing files
 	for _, f := range allFiles {
 		if !seen[f.SHA256] {
 			fmt.Fprintf(os.Stderr, "  ? [%s...]\n", f.SHA256[:10])
@@ -117,8 +105,4 @@ func matchingCategories(relPath string, categories []models.Scope) []models.Scop
 		}
 	}
 	return matched
-}
-
-func now() string {
-	return time.Now().UTC().Format(time.RFC3339)
 }

@@ -1,6 +1,7 @@
 package context
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -85,6 +86,30 @@ func Discover(cwd string) (*Context, error) {
 	default:
 		return &Context{Kind: ContextNone}, nil
 	}
+}
+
+// OpenProjectContext creates a project context for a known project inside a workspace.
+// Used by workspace dispatch to create per-project contexts without re-discovery.
+func OpenProjectContext(projectRoot, projectName string, ws *WorkspaceContext) (*Context, error) {
+	pdb, err := db.OpenProject(filepath.Join(projectRoot, ".mkrk"))
+	if err != nil {
+		return nil, err
+	}
+	return &Context{
+		Kind:        ContextProject,
+		ProjectRoot: projectRoot,
+		ProjectDb:   pdb,
+		ProjectName: &projectName,
+		Workspace:   ws,
+	}, nil
+}
+
+// RequireProject returns project root and db, or error if not in a project.
+func (c *Context) RequireProject() (string, *db.ProjectDb, error) {
+	if c.Kind != ContextProject {
+		return "", nil, fmt.Errorf("not in a project")
+	}
+	return c.ProjectRoot, c.ProjectDb, nil
 }
 
 // Close releases database connections.

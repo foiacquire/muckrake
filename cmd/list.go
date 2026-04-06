@@ -12,28 +12,26 @@ import (
 	"go.foia.dev/muckrake/internal/walk"
 )
 
-func RunList(args []string) error {
+func RunList(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	fs.Parse(args)
 
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
+	if ctx.Kind != context.ContextProject {
+		return fmt.Errorf("not in a project")
 	}
-	defer ctx.Close()
 
-	if ctx.Kind == context.ContextNone {
-		return fmt.Errorf("not in a muckrake project or workspace")
+	projectName := ""
+	if ctx.ProjectName != nil {
+		projectName = *ctx.ProjectName
 	}
 
 	if fs.NArg() > 0 {
-		return listRefFiles(ctx, fs.Args())
+		return listRefFiles(ctx, projectName, fs.Args())
 	}
-	return listAllFiles(ctx)
+	return listAllFiles(ctx, projectName)
 }
 
-func listAllFiles(ctx *context.Context) error {
+func listAllFiles(ctx *context.Context, projectName string) error {
 	patterns, err := walk.CategoryPatterns(ctx.ProjectDb, nil)
 	if err != nil {
 		return err
@@ -44,7 +42,7 @@ func listAllFiles(ctx *context.Context) error {
 	}
 
 	for _, relPath := range entries {
-		fmt.Println(reference.FormatRef(relPath, ctx.ProjectDb))
+		fmt.Println(reference.FormatRef(relPath, projectName, ctx.ProjectDb))
 	}
 
 	if len(entries) == 0 {
@@ -53,7 +51,7 @@ func listAllFiles(ctx *context.Context) error {
 	return nil
 }
 
-func listRefFiles(ctx *context.Context, refs []string) error {
+func listRefFiles(ctx *context.Context, projectName string, refs []string) error {
 	for _, raw := range refs {
 		ref, err := reference.ParseReference(raw)
 		if err != nil {
@@ -66,7 +64,7 @@ func listRefFiles(ctx *context.Context, refs []string) error {
 		}
 
 		if len(ref.Scope) == 0 {
-			return listAllFiles(ctx)
+			return listAllFiles(ctx, projectName)
 		}
 
 		catName := ref.Scope[0].Names[0]
@@ -88,7 +86,7 @@ func listRefFiles(ctx *context.Context, refs []string) error {
 					continue
 				}
 			}
-			fmt.Println(relPath)
+			fmt.Println(reference.FormatRef(relPath, projectName, ctx.ProjectDb))
 		}
 	}
 	return nil

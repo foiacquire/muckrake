@@ -1,7 +1,6 @@
 package reference
 
 import (
-	"os"
 	"strings"
 
 	"go.foia.dev/muckrake/internal/db"
@@ -9,16 +8,8 @@ import (
 )
 
 // FormatRef converts a filesystem relative path into a canonical reference
-// string. Uses the project name from MKRK_PROJECT env var when in workspace
-// dispatch context.
-func FormatRef(relPath string, pdb *db.ProjectDb) string {
-	projectName := os.Getenv("MKRK_PROJECT")
-	return FormatRefWithProject(relPath, projectName, pdb)
-}
-
-// FormatRefWithProject converts a filesystem relative path into a canonical
-// reference string with explicit project name.
-func FormatRefWithProject(relPath, projectName string, pdb *db.ProjectDb) string {
+// string. If projectName is non-empty, output is workspace-scoped.
+func FormatRef(relPath string, projectName string, pdb *db.ProjectDb) string {
 	cat, _ := pdb.MatchCategory(relPath)
 
 	if cat != nil && cat.Pattern != nil {

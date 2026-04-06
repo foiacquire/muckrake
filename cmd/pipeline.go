@@ -11,36 +11,26 @@ import (
 	"go.foia.dev/muckrake/internal/models"
 )
 
-func RunPipeline(args []string) error {
+func RunPipeline(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("pipeline", flag.ExitOnError)
 	remove := fs.Bool("remove", false, "remove pipeline")
 	fs.BoolVar(remove, "r", false, "shorthand for --remove")
 	states := fs.String("states", "", "comma-separated state names (e.g., draft,review,published)")
 	transitions := fs.String("transitions", "", "JSON transitions (optional, defaults to linear)")
 
-	// Extract positional name before flags
 	name, flagArgs := extractName(args)
 	fs.Parse(flagArgs)
 
 	if name == "" {
 		return fmt.Errorf("usage: mkrk pipeline [--remove] <name> [--states draft,review,published]")
 	}
-
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-	defer ctx.Close()
-
 	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("not in a project (run from a project directory or use sync first)")
+		return fmt.Errorf("not in a project")
 	}
 
 	if *remove {
 		return removePipeline(ctx, name)
 	}
-
 	return createPipeline(ctx, name, *states, *transitions)
 }
 
@@ -98,7 +88,6 @@ func removePipeline(ctx *context.Context, name string) error {
 	return nil
 }
 
-// extractName finds the first non-flag argument and returns it separately.
 func extractName(args []string) (string, []string) {
 	var name string
 	var rest []string
@@ -113,7 +102,6 @@ func extractName(args []string) (string, []string) {
 }
 
 func parseTransitions(jsonStr string, pl *models.Pipeline) error {
-	// JSON parsing for custom transitions
 	var trans map[string][]string
 	if err := json.Unmarshal([]byte(jsonStr), &trans); err != nil {
 		return fmt.Errorf("invalid transitions JSON: %w", err)

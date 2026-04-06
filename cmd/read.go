@@ -9,11 +9,12 @@ import (
 	"path/filepath"
 
 	"go.foia.dev/muckrake/internal/context"
+	"go.foia.dev/muckrake/internal/models"
 	"go.foia.dev/muckrake/internal/reference"
 	"go.foia.dev/muckrake/internal/walk"
 )
 
-func RunRead(args []string) error {
+func RunRead(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("read", flag.ExitOnError)
 	raw := fs.Bool("raw", false, "no color or decoration")
 	pathFlag := fs.Bool("path", false, "show file path before content")
@@ -22,16 +23,8 @@ func RunRead(args []string) error {
 	if fs.NArg() == 0 {
 		return fmt.Errorf("usage: mkrk read <reference> [references...]")
 	}
-
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-	defer ctx.Close()
-
 	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("not in a project (run from a project directory or use sync first)")
+		return fmt.Errorf("not in a project")
 	}
 
 	total := 0
@@ -94,8 +87,9 @@ func resolveToFilePaths(ctx *context.Context, rawRef string) ([]string, error) {
 	for _, relPath := range entries {
 		if ref.Glob != nil {
 			fileName := filepath.Base(relPath)
-			mf, _ := reference.GlobMatchFile(*ref.Glob, fileName, relPath)
-			if !mf {
+			mf, _ := models.GlobMatch(*ref.Glob, fileName)
+			mp, _ := models.GlobMatch(*ref.Glob, relPath)
+			if !mf && !mp {
 				continue
 			}
 		}
@@ -116,7 +110,6 @@ func dumpContent(path string, colorize bool) error {
 		return err
 	}
 
-	// Read header to check for binary
 	reader := bufio.NewReaderSize(f, 8192)
 	header, err := reader.Peek(min(int(info.Size()), 8192))
 	if err != nil && err != io.EOF {
@@ -133,12 +126,10 @@ func dumpContent(path string, colorize bool) error {
 		return nil
 	}
 
-	// Stream content
 	if _, err := io.Copy(os.Stdout, reader); err != nil {
 		return err
 	}
 
-	// Ensure trailing newline
 	if len(header) > 0 && header[len(header)-1] != '\n' {
 		fmt.Println()
 	}

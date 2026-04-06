@@ -11,7 +11,7 @@ import (
 	"go.foia.dev/muckrake/internal/materialize"
 )
 
-func RunTag(args []string) error {
+func RunTag(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("tag", flag.ExitOnError)
 	remove := fs.Bool("remove", false, "remove tag instead of adding")
 	fs.BoolVar(remove, "r", false, "shorthand for --remove")
@@ -21,19 +21,12 @@ func RunTag(args []string) error {
 		return fmt.Errorf("usage: mkrk tag [--remove] <reference> <tag>")
 	}
 
+	if ctx.Kind != context.ContextProject {
+		return fmt.Errorf("not in a project")
+	}
+
 	rawRef := fs.Arg(0)
 	tagName := fs.Arg(1)
-
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-	defer ctx.Close()
-
-	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("not in a project (run from a project directory or use sync first)")
-	}
 
 	paths, err := resolveToRelPaths(ctx, rawRef)
 	if err != nil {
@@ -73,7 +66,6 @@ func RunTag(args []string) error {
 			fmt.Fprintf(os.Stderr, "  + %s !%s\n", relPath, tagName)
 		}
 
-		// Re-materialize after tag change
 		tags, _ := ctx.ProjectDb.GetTags(*file.ID)
 		matchingCats := matchingCategories(relPath, categories)
 		materialize.MaterializeForFile(ctx.ProjectDb, relPath, hash, matchingCats, tags)

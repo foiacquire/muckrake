@@ -3,7 +3,6 @@ package cmd
 import (
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"go.foia.dev/muckrake/internal/context"
@@ -14,16 +13,9 @@ import (
 	"go.foia.dev/muckrake/internal/walk"
 )
 
-func RunStatus(args []string) error {
+func RunStatus(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	fs.Parse(args)
-
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-	defer ctx.Close()
 
 	if ctx.Kind == context.ContextNone {
 		return fmt.Errorf("not in a muckrake project or workspace")
@@ -36,12 +28,8 @@ func RunStatus(args []string) error {
 }
 
 func projectStatus(ctx *context.Context) error {
-	if ctx.Kind == context.ContextWorkspace {
-		ws := ctx.Workspace
-		count, _ := ws.Db.ProjectCount()
-		fmt.Printf("Workspace: %s\n", ws.Root)
-		fmt.Printf("  Projects: %d\n", count)
-		return nil
+	if ctx.Kind != context.ContextProject {
+		return fmt.Errorf("not in a project")
 	}
 
 	fileCount, _ := ctx.ProjectDb.FileCount()
@@ -110,11 +98,9 @@ func printFileStatus(ctx *context.Context, relPath string) error {
 	fmt.Printf("%s\n", relPath)
 	fmt.Printf("  SHA-256: %s\n", hash)
 
-	// Protection level
 	protection, _ := ctx.ProjectDb.ResolveProtection(relPath)
 	fmt.Printf("  Protection: %s\n", protection)
 
-	// Tags
 	if file.ID != nil {
 		tags, _ := ctx.ProjectDb.GetTags(*file.ID)
 		if len(tags) > 0 {
@@ -126,7 +112,6 @@ func printFileStatus(ctx *context.Context, relPath string) error {
 		}
 	}
 
-	// Pipelines (materialized)
 	pipelines, _ := ctx.ProjectDb.GetPipelinesForSHA256(hash)
 	if len(pipelines) > 0 {
 		fmt.Printf("  Pipelines:\n")
@@ -136,7 +121,6 @@ func printFileStatus(ctx *context.Context, relPath string) error {
 		}
 	}
 
-	// Ruleset evaluation
 	evalResult, _ := evaluate.EvaluateForFile(ctx.ProjectDb, &evaluate.EvalContext{
 		SHA256:   hash,
 		MimeType: file.MimeType,
@@ -160,7 +144,6 @@ func derivePipelineState(ctx *context.Context, file *models.TrackedFile, p *mode
 		return p.States[0]
 	}
 
-	// Walk states in order, find the latest reachable state
 	current := p.States[0]
 	for _, state := range p.States[1:] {
 		required, ok := p.Transitions[state]

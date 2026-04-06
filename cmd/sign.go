@@ -13,12 +13,12 @@ import (
 	"go.foia.dev/muckrake/internal/models"
 )
 
-func RunSign(args []string) error {
+func RunSign(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("sign", flag.ExitOnError)
 	remove := fs.Bool("remove", false, "revoke sign instead of creating")
 	fs.BoolVar(remove, "r", false, "shorthand for --remove")
 	pipelineName := fs.String("pipeline", "", "pipeline name")
-	// Extract positional args (reference and sign-name) from mixed flag/arg list
+
 	var positional []string
 	var flagArgs []string
 	for i := 0; i < len(args); i++ {
@@ -38,24 +38,15 @@ func RunSign(args []string) error {
 	if len(positional) < 2 {
 		return fmt.Errorf("usage: mkrk sign [--remove] <reference> <sign-name> --pipeline <name>")
 	}
-
-	rawRef := positional[0]
-	signName := positional[1]
-
 	if *pipelineName == "" {
 		return fmt.Errorf("--pipeline is required")
 	}
-
-	cwd, _ := os.Getwd()
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-	defer ctx.Close()
-
 	if ctx.Kind != context.ContextProject {
-		return fmt.Errorf("not in a project (run from a project directory or use sync first)")
+		return fmt.Errorf("not in a project")
 	}
+
+	rawRef := positional[0]
+	signName := positional[1]
 
 	paths, err := resolveToRelPaths(ctx, rawRef)
 	if err != nil {
@@ -90,7 +81,6 @@ func RunSign(args []string) error {
 }
 
 func createSign(ctx *context.Context, fileID, pipelineID int64, hash, signName string, pipeline *models.Pipeline, relPath string) error {
-	// Validate sign name is a valid transition requirement
 	validName := false
 	for _, reqs := range pipeline.Transitions {
 		for _, r := range reqs {
@@ -127,12 +117,6 @@ func createSign(ctx *context.Context, fileID, pipelineID int64, hash, signName s
 }
 
 func revokeSign(ctx *context.Context, fileID, pipelineID int64, signName, relPath string) error {
-	signs, err := ctx.ProjectDb.GetValidSignsForFilePipeline(fileID, pipelineID, "")
-	if err != nil {
-		return err
-	}
-
-	// Find the sign by name (get all valid signs, filter by name)
 	allSigns, err := ctx.ProjectDb.GetSignsForFile(fileID)
 	if err != nil {
 		return err
@@ -148,7 +132,6 @@ func revokeSign(ctx *context.Context, fileID, pipelineID int64, signName, relPat
 			revoked++
 		}
 	}
-	_ = signs
 
 	if revoked == 0 {
 		return fmt.Errorf("no active sign '%s' found for '%s'", signName, relPath)

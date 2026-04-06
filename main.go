@@ -6,16 +6,15 @@ import (
 	"path/filepath"
 
 	"go.foia.dev/muckrake/cmd"
-	"go.foia.dev/muckrake/internal/db"
+	"go.foia.dev/muckrake/internal/context"
 )
 
 type command struct {
-	run  func([]string) error
+	run  func(*context.Context, []string) error
 	desc string
 }
 
 var commands = map[string]command{
-	"init":     {cmd.RunInit, "initialize a project or workspace"},
 	"sync":     {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
 	"status":   {cmd.RunStatus, "show project or file status"},
 	"list":     {cmd.RunList, "list files, optionally filtered by reference"},
@@ -35,7 +34,7 @@ commands:
   init       initialize a project or workspace
   sync       scan filesystem, track new files, verify integrity
   status     show project or file status
-  list       show scopes or files (--files)
+  list       list files, optionally filtered by reference
   tag        add or remove tags (--remove)
   sign       create or revoke pipeline attestations (--remove)
   pipeline   create or remove pipelines (--remove)
@@ -75,87 +74,78 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Init is special — it creates context rather than consuming it
+	if os.Args[1] == "init" {
+		if err := cmd.RunInit(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	c, ok := commands[os.Args[1]]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
 
-	args := os.Args[2:]
-
-	// If we're at a workspace root (not inside a project), dispatch
-	// the command to each registered project.
-	if c.run != nil && os.Args[1] != "init" {
-		if dispatched, err := workspaceDispatch(c, args); dispatched {
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		}
-	}
-
-	if err := c.run(args); err != nil {
+	if err := dispatch(c, os.Args[2:]); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// workspaceDispatch checks if CWD is at a workspace root (has .mksp but no .mkrk).
-// If so, it runs the command once per registered project by chdir-ing into each.
-// Returns (true, err) if dispatched, (false, nil) if not a workspace root.
-func workspaceDispatch(c command, args []string) (bool, error) {
+func dispatch(c command, args []string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return false, nil
+		return err
 	}
 
-	// Only dispatch if we're at workspace root, not inside a project
-	if fileExists(filepath.Join(cwd, ".mkrk")) {
-		return false, nil
-	}
-	if !fileExists(filepath.Join(cwd, ".mksp")) {
-		return false, nil
-	}
-
-	wdb, err := db.OpenWorkspace(filepath.Join(cwd, ".mksp"))
+	ctx, err := context.Discover(cwd)
 	if err != nil {
-		return false, nil
+		return err
 	}
-	defer wdb.Close()
 
-	projects, err := wdb.ListProjects()
+	// If at workspace root (not inside a project), dispatch to each project
+	if ctx.Kind == context.ContextWorkspace {
+		return dispatchWorkspace(c, ctx, args)
+	}
+
+	defer ctx.Close()
+	return c.run(ctx, args)
+}
+
+func dispatchWorkspace(c command, wsCtx *context.Context, args []string) error {
+	defer wsCtx.Close()
+
+	projects, err := wsCtx.Workspace.Db.ListProjects()
 	if err != nil {
-		return true, err
+		return err
 	}
 	if len(projects) == 0 {
-		return true, fmt.Errorf("no projects registered in workspace")
+		return fmt.Errorf("no projects registered in workspace")
 	}
 
 	var lastErr error
 	for _, p := range projects {
-		projDir := filepath.Join(cwd, p.Path)
-		if !fileExists(filepath.Join(projDir, ".mkrk")) {
+		projRoot := filepath.Join(wsCtx.Workspace.Root, p.Path)
+		if !fileExists(filepath.Join(projRoot, ".mkrk")) {
 			continue
 		}
 
-		if err := os.Chdir(projDir); err != nil {
-			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
+		projCtx, err := context.OpenProjectContext(projRoot, p.Name, wsCtx.Workspace)
+		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		os.Setenv("MKRK_PROJECT", p.Name)
-		if err := c.run(args); err != nil {
-			fmt.Fprintf(os.Stderr, "  error: %v\n", err)
+		if err := c.run(projCtx, args); err != nil {
 			lastErr = err
 		}
+		projCtx.Close()
 	}
 
-	os.Unsetenv("MKRK_PROJECT")
-	os.Chdir(cwd)
-
-	return true, lastErr
+	return lastErr
 }
 
 func fileExists(path string) bool {

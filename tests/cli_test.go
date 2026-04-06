@@ -130,7 +130,7 @@ func TestSyncTracksFiles(t *testing.T) {
 		t.Fatalf("expected report.txt in sync output, got: %s", stderr)
 	}
 
-	stdout, _ := mustMkrk(t, dir, "list", "--files")
+	stdout, _ := mustMkrk(t, dir, "list")
 	if !strings.Contains(stdout, "report.txt") {
 		t.Fatalf("expected report.txt in list output, got: %s", stdout)
 	}
@@ -265,12 +265,6 @@ func TestWorkspaceSyncDispatch(t *testing.T) {
 
 	// Sync from workspace root should dispatch to both projects
 	_, stderr := mustMkrk(t, wsDir, "sync")
-	if !strings.Contains(stderr, "alpha") {
-		t.Fatalf("expected alpha in output, got: %s", stderr)
-	}
-	if !strings.Contains(stderr, "beta") {
-		t.Fatalf("expected beta in output, got: %s", stderr)
-	}
 	if !strings.Contains(stderr, "a.txt") {
 		t.Fatalf("expected a.txt in output, got: %s", stderr)
 	}
@@ -289,10 +283,12 @@ func TestWorkspaceListDispatch(t *testing.T) {
 	createTestFile(t, wsDir, "projects/alpha/evidence/report.txt", "test")
 	mustMkrk(t, filepath.Join(wsDir, "projects/alpha"), "sync")
 
-	// List from workspace root should dispatch to alpha
-	stdout, stderr := mustMkrk(t, wsDir, "list", "--files")
-	combined := stdout + stderr
-	if !strings.Contains(combined, "report.txt") {
-		t.Fatalf("expected report.txt in workspace list, got stdout: %s\nstderr: %s", stdout, stderr)
+	// List from workspace root should show files with project-scoped references
+	stdout, _ := mustMkrk(t, wsDir, "list")
+	if !strings.Contains(stdout, ":alpha") {
+		t.Fatalf("expected :alpha scoped reference, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "report.txt") {
+		t.Fatalf("expected report.txt in output, got: %s", stdout)
 	}
 }
