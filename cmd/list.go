@@ -45,11 +45,10 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 	for _, relPath := range entries {
 		absPath := filepath.Join(ctx.ProjectRoot, relPath)
 		ref := reference.FormatRef(relPath, projectName, ctx.ProjectDb)
-		fmt.Println(ref)
 
-		// Fingerprint check — warn on stderr if not tracked
 		fp, err := integrity.FingerprintFile(absPath)
 		if err != nil {
+			fmt.Printf("\033[31m%s\033[0m\n", ref)
 			fmt.Fprintf(os.Stderr, "! %s: %v\n", ref, err)
 			continue
 		}
@@ -59,7 +58,9 @@ func listAllFiles(ctx *context.Context, projectName string) error {
 			file, _ = ctx.ProjectDb.GetFileByHash(hash)
 		}
 		if file == nil {
-			fmt.Fprintf(os.Stderr, "? %s (untracked)\n", ref)
+			fmt.Printf("\033[31m%s\033[0m\n", ref)
+		} else {
+			fmt.Println(ref)
 		}
 	}
 
