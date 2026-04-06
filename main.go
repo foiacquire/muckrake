@@ -13,14 +13,8 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"init":     {cmd.RunInit, "initialize a project or workspace"},
-	"sync":     {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
-	"list":     {cmd.RunList, "show scopes, pipelines, or files"},
-	"status":   {cmd.RunStatus, "show project or file status"},
-	"tag":      {cmd.RunTag, "add or remove tags"},
-	"sign":     {cmd.RunSign, "create or remove pipeline attestations"},
-	"pipeline": {cmd.RunPipeline, "create or remove pipelines"},
-	"read":     {cmd.RunRead, "output file contents"},
+	"init": {cmd.RunInit, "initialize a project or workspace"},
+	"sync": {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
 }
 
 func main() {
