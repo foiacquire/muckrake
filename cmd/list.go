@@ -30,33 +30,14 @@ func RunList(args []string) error {
 		return fmt.Errorf("not in a muckrake project or workspace")
 	}
 
-	if ctx.Kind == context.ContextWorkspace {
-		return listWorkspace(ctx)
+	if ctx.Kind == context.ContextNone {
+		return fmt.Errorf("not in a muckrake project or workspace")
 	}
 
-	if *files {
+	if *files || fs.NArg() > 0 {
 		return listFiles(ctx, fs.Args())
 	}
 	return listScopes(ctx)
-}
-
-func listWorkspace(ctx *context.Context) error {
-	projects, err := ctx.Workspace.Db.ListProjects()
-	if err != nil {
-		return err
-	}
-	if len(projects) == 0 {
-		fmt.Fprintln(os.Stderr, "No projects registered")
-		return nil
-	}
-	for _, p := range projects {
-		desc := ""
-		if p.Description != nil {
-			desc = fmt.Sprintf("  %s", *p.Description)
-		}
-		fmt.Printf("  %-15s %s%s\n", p.Name, p.Path, desc)
-	}
-	return nil
 }
 
 func listScopes(ctx *context.Context) error {
