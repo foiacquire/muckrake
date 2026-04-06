@@ -34,6 +34,7 @@ func CreateProject(path string) (*ProjectDb, error) {
 }
 
 // OpenProject opens an existing project database.
+// Runs schema with IF NOT EXISTS to add any new tables from newer versions.
 func OpenProject(path string) (*ProjectDb, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("project database not found: %s", path)
@@ -45,6 +46,16 @@ func OpenProject(path string) (*ProjectDb, error) {
 	if err := configureConn(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// Create any missing tables (all use IF NOT EXISTS)
+	if _, err := db.Exec(ProjectSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate project schema: %w", err)
+	}
+	// Migrate legacy Rust data if present
+	if err := MigrateProject(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate project data: %w", err)
 	}
 	return &ProjectDb{db: db}, nil
 }

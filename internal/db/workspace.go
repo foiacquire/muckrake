@@ -43,6 +43,7 @@ func CreateWorkspace(path string) (*WorkspaceDb, error) {
 }
 
 // OpenWorkspace opens an existing workspace database.
+// Runs schema with IF NOT EXISTS to add any new tables from newer versions.
 func OpenWorkspace(path string) (*WorkspaceDb, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("workspace database not found: %s", path)
@@ -54,6 +55,14 @@ func OpenWorkspace(path string) (*WorkspaceDb, error) {
 	if err := configureConn(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if _, err := db.Exec(WorkspaceSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate workspace schema: %w", err)
+	}
+	if err := MigrateWorkspace(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate workspace data: %w", err)
 	}
 	return &WorkspaceDb{db: db}, nil
 }
