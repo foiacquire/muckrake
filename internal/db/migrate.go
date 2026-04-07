@@ -84,6 +84,11 @@ func MigrateProject(d *sql.DB) error {
 		return fmt.Errorf("migration verification failed: %d categories but %d category scopes", oldCats, newCats)
 	}
 
+	// Migrate files table — drop legacy columns (name, path, immutable)
+	if columnExists(d, "files", "name") {
+		migrateFilesTable(d)
+	}
+
 	// Drop legacy tables
 	for _, table := range []string{"category_policy", "categories", "tool_config", "tag_tool_config"} {
 		if tableExists(d, table) {
@@ -163,6 +168,58 @@ func MigrateWorkspace(d *sql.DB) error {
 	}
 
 	return nil
+}
+
+func migrateFilesTable(d *sql.DB) {
+	// SQLite doesn't support DROP COLUMN before 3.35.0.
+	// Safest approach: create new table, copy data, swap.
+	d.Exec(`CREATE TABLE IF NOT EXISTS files_new (
+		id INTEGER PRIMARY KEY,
+		sha256 TEXT NOT NULL UNIQUE,
+		fingerprint TEXT NOT NULL,
+		mime_type TEXT,
+		size INTEGER,
+		ingested_at TEXT NOT NULL,
+		provenance TEXT
+	)`)
+
+	d.Exec(`INSERT OR IGNORE INTO files_new (id, sha256, fingerprint, mime_type, size, ingested_at, provenance)
+		SELECT id, sha256, COALESCE(fingerprint, '[]'), mime_type, size, ingested_at, provenance
+		FROM files WHERE sha256 IS NOT NULL AND sha256 != ''`)
+
+	// Verify counts match (only rows with valid sha256)
+	var oldCount, newCount int64
+	d.QueryRow(`SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL AND sha256 != ''`).Scan(&oldCount)
+	d.QueryRow(`SELECT COUNT(*) FROM files_new`).Scan(&newCount)
+
+	if oldCount == newCount {
+		d.Exec(`DROP TABLE files`)
+		d.Exec(`ALTER TABLE files_new RENAME TO files`)
+	} else {
+		// Migration failed — leave old table, drop the new one
+		d.Exec(`DROP TABLE files_new`)
+	}
+}
+
+func columnExists(d *sql.DB, table, column string) bool {
+	rows, err := d.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt *string
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }
 
 func tableExists(d *sql.DB, name string) bool {
