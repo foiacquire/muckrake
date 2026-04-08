@@ -38,13 +38,16 @@ func RunSync(ctx *context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	quiet := fs.Bool("quiet", false, "non-interactive, exit with conflict count")
 	fs.BoolVar(quiet, "q", false, "shorthand for --quiet")
+	dryRun := fs.Bool("dry-run", false, "show what would happen without making changes")
+	fs.BoolVar(dryRun, "n", false, "shorthand for --dry-run")
 	fs.Parse(args)
 
 	if ctx.Kind != context.ContextProject {
 		return fmt.Errorf("not in a project")
 	}
 
-	interactive := !*quiet && term.IsTerminal(int(os.Stdin.Fd()))
+	interactive := !*quiet && !*dryRun && term.IsTerminal(int(os.Stdin.Fd()))
+	dry := *dryRun
 
 	projectName := ""
 	if ctx.ProjectName != nil {
@@ -86,7 +89,9 @@ func RunSync(ctx *context.Context, args []string) error {
 		// Exact fingerprint match
 		if file, _ := ctx.ProjectDb.GetFileByFingerprint(fp.ToJSON()); file != nil {
 			seen[file.SHA256] = true
-			checkImmutableFlag(ctx, absPath, relPath, ref, &counts)
+			if !dry {
+				checkImmutableFlag(ctx, absPath, relPath, ref, &counts)
+			}
 			fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s\n", ref)
 			counts.ok++
 			continue
@@ -95,11 +100,17 @@ func RunSync(ctx *context.Context, args []string) error {
 		// Hash match — tracked but fingerprint stale, update it
 		if file, _ := ctx.ProjectDb.GetFileByHash(hash); file != nil {
 			seen[hash] = true
-			if file.ID != nil {
+			if file.ID != nil && !dry {
 				ctx.ProjectDb.UpdateFileFingerprint(*file.ID, fp.ToJSON())
 			}
-			checkImmutableFlag(ctx, absPath, relPath, ref, &counts)
-			fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s \033[36m(fingerprint updated)\033[0m\n", ref)
+			if !dry {
+				checkImmutableFlag(ctx, absPath, relPath, ref, &counts)
+			}
+			label := "fingerprint updated"
+			if dry {
+				label = "would update fingerprint"
+			}
+			fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s \033[36m(%s)\033[0m\n", ref, label)
 			counts.ok++
 			continue
 		}
@@ -117,6 +128,12 @@ func RunSync(ctx *context.Context, args []string) error {
 		}
 
 		// No match — new file, ingest
+		if dry {
+			fmt.Fprintf(os.Stderr, "  \033[32m+\033[0m %s \033[36m(would ingest)\033[0m\n", ref)
+			counts.ingested++
+			continue
+		}
+
 		file := &models.TrackedFile{
 			SHA256:      hash,
 			Fingerprint: fp.ToJSON(),
@@ -133,7 +150,6 @@ func RunSync(ctx *context.Context, args []string) error {
 		matchingCats := matchingCategories(relPath, categories)
 		materialize.MaterializeForFile(ctx.ProjectDb, relPath, hash, matchingCats, nil)
 
-		// Set immutable flag if protection policy requires it
 		protection, _ := ctx.ProjectDb.ResolveProtection(relPath)
 		enforceImmutable(absPath, protection, ref)
 
@@ -143,7 +159,7 @@ func RunSync(ctx *context.Context, args []string) error {
 
 	// Resolve conflicts
 	if len(conflicts) > 0 {
-		resolveConflicts(ctx, &counts, conflicts, categories, interactive, projectName)
+		resolveConflicts(ctx, &counts, conflicts, categories, interactive, dry, projectName)
 	}
 
 	// Check for missing files
@@ -166,8 +182,12 @@ func RunSync(ctx *context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr)
 	}
 
-	fmt.Fprintf(os.Stderr, "Sync: %d ok, %d new, %d modified, %d missing, %d other\n",
-		counts.ok, counts.ingested, counts.modified, counts.missing, counts.other)
+	prefix := "Sync"
+	if dry {
+		prefix = "Dry run"
+	}
+	fmt.Fprintf(os.Stderr, "%s: %d ok, %d new, %d modified, %d missing, %d other\n",
+		prefix, counts.ok, counts.ingested, counts.modified, counts.missing, counts.other)
 
 	exitCode := counts.other
 	if exitCode > 0 {
@@ -185,6 +205,7 @@ func resolveConflicts(
 	conflicts []syncConflict,
 	categories []models.Scope,
 	interactive bool,
+	dry bool,
 	projectName string,
 ) {
 	for i, c := range conflicts {
@@ -223,31 +244,40 @@ func resolveConflicts(
 
 		switch choice {
 		case "n", "new":
-			// Ingest as new file
-			file := &models.TrackedFile{
-				SHA256:      c.diskHash,
-				Fingerprint: c.diskFp.ToJSON(),
-				IngestedAt:  time.Now().UTC().Format(time.RFC3339),
+			if !dry {
+				file := &models.TrackedFile{
+					SHA256:      c.diskHash,
+					Fingerprint: c.diskFp.ToJSON(),
+					IngestedAt:  time.Now().UTC().Format(time.RFC3339),
+				}
+				fileID, err := ctx.ProjectDb.InsertFile(file)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m %s: %v\n", c.ref, err)
+					continue
+				}
+				_ = fileID
+				matchingCats := matchingCategories(c.relPath, categories)
+				materialize.MaterializeForFile(ctx.ProjectDb, c.relPath, c.diskHash, matchingCats, nil)
 			}
-			fileID, err := ctx.ProjectDb.InsertFile(file)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m %s: %v\n", c.ref, err)
-				continue
+			label := "(new)"
+			if dry {
+				label = "(would ingest as new)"
 			}
-			_ = fileID
-			matchingCats := matchingCategories(c.relPath, categories)
-			materialize.MaterializeForFile(ctx.ProjectDb, c.relPath, c.diskHash, matchingCats, nil)
-			fmt.Fprintf(os.Stderr, "  \033[32m+\033[0m %s (new)\n", c.ref)
+			fmt.Fprintf(os.Stderr, "  \033[32m+\033[0m %s %s\n", c.ref, label)
 			counts.ingested++
 
 		case "m", "modified":
-			// Update the existing file's hash and fingerprint
-			if c.matchFile != nil && c.matchFile.ID != nil {
-				ctx.ProjectDb.UpdateFileFingerprint(*c.matchFile.ID, c.diskFp.ToJSON())
-				// Update SHA256 too
-				ctx.ProjectDb.UpdateFileSHA256(*c.matchFile.ID, c.diskHash)
+			if !dry {
+				if c.matchFile != nil && c.matchFile.ID != nil {
+					ctx.ProjectDb.UpdateFileFingerprint(*c.matchFile.ID, c.diskFp.ToJSON())
+					ctx.ProjectDb.UpdateFileSHA256(*c.matchFile.ID, c.diskHash)
+				}
 			}
-			fmt.Fprintf(os.Stderr, "  \033[33m~\033[0m %s (modified)\n", c.ref)
+			label := "(modified)"
+			if dry {
+				label = "(would update as modified)"
+			}
+			fmt.Fprintf(os.Stderr, "  \033[33m~\033[0m %s %s\n", c.ref, label)
 			counts.modified++
 
 		default:
