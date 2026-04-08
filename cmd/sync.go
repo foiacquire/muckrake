@@ -86,6 +86,7 @@ func RunSync(ctx *context.Context, args []string) error {
 		// Exact fingerprint match
 		if file, _ := ctx.ProjectDb.GetFileByFingerprint(fp.ToJSON()); file != nil {
 			seen[file.SHA256] = true
+			checkImmutableFlag(ctx, absPath, relPath, ref, &counts)
 			fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s\n", ref)
 			counts.ok++
 			continue
@@ -97,6 +98,7 @@ func RunSync(ctx *context.Context, args []string) error {
 			if file.ID != nil {
 				ctx.ProjectDb.UpdateFileFingerprint(*file.ID, fp.ToJSON())
 			}
+			checkImmutableFlag(ctx, absPath, relPath, ref, &counts)
 			fmt.Fprintf(os.Stderr, "  \033[32m✓\033[0m %s \033[36m(fingerprint updated)\033[0m\n", ref)
 			counts.ok++
 			continue
@@ -130,6 +132,10 @@ func RunSync(ctx *context.Context, args []string) error {
 
 		matchingCats := matchingCategories(relPath, categories)
 		materialize.MaterializeForFile(ctx.ProjectDb, relPath, hash, matchingCats, nil)
+
+		// Set immutable flag if protection policy requires it
+		protection, _ := ctx.ProjectDb.ResolveProtection(relPath)
+		enforceImmutable(absPath, protection, ref)
 
 		fmt.Fprintf(os.Stderr, "  \033[32m+\033[0m %s\n", ref)
 		counts.ingested++
@@ -280,6 +286,33 @@ func findPartialMatchFile(allFiles []models.TrackedFile, diskFp *integrity.Finge
 		}
 	}
 	return nil
+}
+
+func enforceImmutable(absPath string, protection models.ProtectionLevel, ref string) {
+	if protection == models.ProtectionImmutable {
+		if err := integrity.SetImmutable(absPath); err != nil {
+			fmt.Fprintf(os.Stderr, "  \033[33m!\033[0m %s: could not set immutable: %v\n", ref, err)
+		}
+	}
+}
+
+func checkImmutableFlag(ctx *context.Context, absPath, relPath, ref string, counts *syncCounts) {
+	protection, _ := ctx.ProjectDb.ResolveProtection(relPath)
+	isImmutable, _ := integrity.IsImmutable(absPath)
+
+	if protection == models.ProtectionImmutable && !isImmutable {
+		if err := integrity.SetImmutable(absPath); err != nil {
+			fmt.Fprintf(os.Stderr, "  \033[33m!\033[0m %s: could not restore immutable flag: %v\n", ref, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  \033[36m+\033[0m %s restored immutable flag\n", ref)
+		}
+	} else if protection != models.ProtectionImmutable && isImmutable {
+		if err := integrity.ClearImmutable(absPath); err != nil {
+			fmt.Fprintf(os.Stderr, "  \033[33m!\033[0m %s: could not clear immutable flag: %v\n", ref, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  \033[36m+\033[0m %s cleared immutable flag (policy: %s)\n", ref, protection)
+		}
+	}
 }
 
 func matchingCategories(relPath string, categories []models.Scope) []models.Scope {
