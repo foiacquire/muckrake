@@ -336,6 +336,101 @@ func TestToolUnknownName(t *testing.T) {
 	}
 }
 
+func TestToolResolvesRefArgs(t *testing.T) {
+	dir := initTestProject(t)
+	createTestFile(t, dir, "evidence/a.txt", "alpha")
+	createTestFile(t, dir, "evidence/b.txt", "beta")
+	mustMkrk(t, dir, "sync")
+
+	// cat-equivalent: echoes each path, so output should list both files.
+	script := "#!/bin/sh\nfor f in \"$@\"; do echo \"$f\"; done\n"
+	createTestFile(t, dir, "tools/ls.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/ls.sh"), 0o755)
+
+	stdout, stderr, err := mkrk(t, dir, "tool", "ls", ":evidence")
+	if err != nil {
+		t.Fatalf("tool ls :evidence failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "evidence/a.txt") || !strings.Contains(stdout, "evidence/b.txt") {
+		t.Fatalf("expected both evidence files in output, got: %s", stdout)
+	}
+}
+
+func TestToolPassesNonRefArgsVerbatim(t *testing.T) {
+	dir := initTestProject(t)
+	script := "#!/bin/sh\necho \"$1\"\n"
+	createTestFile(t, dir, "tools/echo.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/echo.sh"), 0o755)
+
+	stdout, _ := mustMkrk(t, dir, "tool", "echo", "--flag")
+	if !strings.Contains(stdout, "--flag") {
+		t.Fatalf("expected --flag passed through, got: %s", stdout)
+	}
+}
+
+func TestToolSetsPrivacyProxy(t *testing.T) {
+	dir := initTestProject(t)
+	script := "#!/bin/sh\necho \"http_proxy=$http_proxy\"\necho \"all_proxy=$all_proxy\"\n"
+	createTestFile(t, dir, "tools/proxycheck.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/proxycheck.sh"), 0o755)
+
+	stdout, stderr, err := mkrk(t, dir, "tool", "proxycheck")
+	if err != nil {
+		t.Fatalf("tool failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "http_proxy=socks5h://127.0.0.1:9050") {
+		t.Fatalf("expected default socks proxy set, got: %s", stdout)
+	}
+	if !strings.Contains(stderr, "privacy: routing through") {
+		t.Fatalf("expected privacy notice on stderr, got: %s", stderr)
+	}
+}
+
+func TestToolPrivacyOverride(t *testing.T) {
+	dir := initTestProject(t)
+	script := "#!/bin/sh\necho \"all_proxy=$all_proxy\"\n"
+	createTestFile(t, dir, "tools/px.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/px.sh"), 0o755)
+
+	cmd := exec.Command(binary, "tool", "px")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "NO_COLOR=1", "MKRK_SOCKS=socks5h://127.0.0.1:1080")
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("tool failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "all_proxy=socks5h://127.0.0.1:1080") {
+		t.Fatalf("expected override socks proxy, got: %s", stdout.String())
+	}
+}
+
+func TestToolIngestsOutputs(t *testing.T) {
+	dir := initTestProject(t)
+	createTestFile(t, dir, "evidence/input.txt", "original content")
+	mustMkrk(t, dir, "sync")
+
+	// Tool writes a derived file to MKRK_OUTPUT_DIR
+	script := "#!/bin/sh\nprintf 'derived' > \"$MKRK_OUTPUT_DIR/result.txt\"\n"
+	createTestFile(t, dir, "tools/derive.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/derive.sh"), 0o755)
+
+	stdout, stderr, err := mkrk(t, dir, "tool", "derive", ":evidence")
+	if err != nil {
+		t.Fatalf("tool derive failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "ingested 1 output file") {
+		t.Fatalf("expected ingestion notice, got: %s", stderr)
+	}
+
+	// Output file should exist in project tree under outputs/derive-*/result.txt
+	matches, _ := filepath.Glob(filepath.Join(dir, "outputs", "derive-*", "result.txt"))
+	if len(matches) != 1 {
+		t.Fatalf("expected one output file under outputs/derive-*, got: %v", matches)
+	}
+}
+
 func TestToolExplicitProjectPrefix(t *testing.T) {
 	dir := initTestProject(t)
 	script := "#!/bin/sh\necho explicit\n"

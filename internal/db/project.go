@@ -322,6 +322,17 @@ func (p *ProjectDb) GetTags(fileID int64) ([]string, error) {
 	return tags, rows.Err()
 }
 
+// --- File Links ---
+
+func (p *ProjectDb) InsertFileLink(sourceID, targetID int64, linkType string, metadata *string) error {
+	_, err := p.db.Exec(
+		`INSERT INTO file_links (source_file_id, target_file_id, link_type, metadata)
+		 VALUES (?, ?, ?, ?)`,
+		sourceID, targetID, linkType, metadata,
+	)
+	return err
+}
+
 // --- Audit ---
 
 func (p *ProjectDb) InsertAudit(operation string, fileID *int64, user, detail *string) error {
