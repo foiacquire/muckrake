@@ -98,6 +98,10 @@ func initProject(cwd, name string, noCategories bool) error {
 			catDir := filepath.Join(projectDir, models.NameFromPattern(c.pattern))
 			os.MkdirAll(catDir, 0o755)
 		}
+
+		if err := installToolsDispatch(pdb); err != nil {
+			return fmt.Errorf("install tools dispatch: %w", err)
+		}
 	}
 
 	// Register in workspace if applicable
@@ -119,6 +123,42 @@ func initProject(cwd, name string, noCategories bool) error {
 		fmt.Fprintf(os.Stderr, "  %d categories configured\n", len(defaultCategories))
 	}
 
+	return nil
+}
+
+func installToolsDispatch(pdb *db.ProjectDb) error {
+	desc := "Make tools executable and register the `tool` CLI verb"
+	rs := &models.Ruleset{Name: "tools_dispatch", Description: &desc}
+	rsID, err := pdb.InsertRuleset(rs)
+	if err != nil {
+		return err
+	}
+
+	if _, err := pdb.InsertRulesetRule(&models.RulesetRule{
+		RulesetID:  rsID,
+		Priority:   0,
+		ActionType: models.ActionMakeExecutable,
+	}); err != nil {
+		return err
+	}
+
+	verb := "tool"
+	autoScope := true
+	if _, err := pdb.InsertRulesetRule(&models.RulesetRule{
+		RulesetID:  rsID,
+		Priority:   1,
+		ActionType: models.ActionGenerateCommand,
+		ActionConfig: models.RulesetActionConfig{
+			Verb:      &verb,
+			AutoScope: &autoScope,
+		},
+	}); err != nil {
+		return err
+	}
+
+	if _, err := pdb.SubscribeRuleset(rsID, ":.tools"); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -165,6 +165,29 @@ func (p *ProjectDb) UnsubscribeRuleset(rulesetID int64, reference string) (int64
 	return res.RowsAffected()
 }
 
+func (p *ProjectDb) ListSubscriptionsForRuleset(rulesetID int64) ([]models.Subscription, error) {
+	rows, err := p.db.Query(
+		`SELECT id, reference, created_at FROM ruleset_subscriptions WHERE ruleset_id = ?`,
+		rulesetID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subs []models.Subscription
+	for rows.Next() {
+		var s models.Subscription
+		var id int64
+		if err := rows.Scan(&id, &s.Reference, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		s.ID = &id
+		subs = append(subs, s)
+	}
+	return subs, rows.Err()
+}
+
 func (p *ProjectDb) ListAllRulesetSubscriptions() ([]RulesetSubscription, error) {
 	rows, err := p.db.Query(
 		`SELECT ruleset_id, id, reference, created_at FROM ruleset_subscriptions`,

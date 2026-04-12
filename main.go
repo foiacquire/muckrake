@@ -7,6 +7,7 @@ import (
 
 	"go.foia.dev/muckrake/cmd"
 	"go.foia.dev/muckrake/internal/context"
+	"go.foia.dev/muckrake/internal/generator"
 )
 
 type command struct {
@@ -83,16 +84,66 @@ func main() {
 		return
 	}
 
-	c, ok := commands[os.Args[1]]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		os.Exit(1)
+	verb := os.Args[1]
+	args := os.Args[2:]
+
+	if c, ok := commands[verb]; ok {
+		if err := dispatch(c, args); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
-	if err := dispatch(c, os.Args[2:]); err != nil {
+	if err := dispatchGenerated(verb, args); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// dispatchGenerated handles verbs registered by generate_command rules.
+// It resolves context once and routes to cmd.RunGenerated.
+func dispatchGenerated(verb string, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	ctx, err := context.Discover(cwd)
+	if err != nil {
+		return err
+	}
+	defer ctx.Close()
+
+	gens, err := generator.Collect(ctx)
+	if err != nil {
+		return err
+	}
+	if err := checkVerbCollisions(gens); err != nil {
+		return err
+	}
+
+	hasVerb := false
+	for _, g := range gens {
+		if g.Verb == verb {
+			hasVerb = true
+			break
+		}
+	}
+	if !hasVerb {
+		return fmt.Errorf("unknown command: %s", verb)
+	}
+
+	return cmd.RunGenerated(ctx, gens, verb, args)
+}
+
+func checkVerbCollisions(gens []generator.Generator) error {
+	for _, g := range gens {
+		if _, ok := commands[g.Verb]; ok {
+			return fmt.Errorf("generator verb %q (from scope %q in project %q) collides with built-in command",
+				g.Verb, g.Scope.Name, g.ProjectName)
+		}
+	}
+	return nil
 }
 
 func dispatch(c command, args []string) error {

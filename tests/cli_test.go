@@ -292,3 +292,63 @@ func TestWorkspaceListDispatch(t *testing.T) {
 		t.Fatalf("expected report.txt in output, got: %s", stdout)
 	}
 }
+
+// --- Tool dispatch ---
+
+func TestToolExecutesScript(t *testing.T) {
+	dir := initTestProject(t)
+	script := "#!/bin/sh\necho hello-from-tool\n"
+	createTestFile(t, dir, "tools/greet.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/greet.sh"), 0o755)
+
+	stdout, stderr, err := mkrk(t, dir, "tool", "greet")
+	if err != nil {
+		t.Fatalf("tool greet failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "hello-from-tool") {
+		t.Fatalf("expected tool output, got: %s", stdout)
+	}
+}
+
+func TestToolPassesEnv(t *testing.T) {
+	dir := initTestProject(t)
+	script := "#!/bin/sh\necho \"PROJECT=$MKRK_PROJECT_ROOT\"\n"
+	createTestFile(t, dir, "tools/envcheck.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/envcheck.sh"), 0o755)
+
+	stdout, stderr, err := mkrk(t, dir, "tool", "envcheck")
+	if err != nil {
+		t.Fatalf("tool envcheck failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, dir) {
+		t.Fatalf("expected MKRK_PROJECT_ROOT in output, got: %s", stdout)
+	}
+}
+
+func TestToolUnknownName(t *testing.T) {
+	dir := initTestProject(t)
+	_, stderr, err := mkrk(t, dir, "tool", "nonexistent")
+	if err == nil {
+		t.Fatal("expected tool nonexistent to fail")
+	}
+	if !strings.Contains(stderr, "no tool") {
+		t.Fatalf("expected 'no tool' error, got: %s", stderr)
+	}
+}
+
+func TestToolExplicitProjectPrefix(t *testing.T) {
+	dir := initTestProject(t)
+	script := "#!/bin/sh\necho explicit\n"
+	createTestFile(t, dir, "tools/x.sh", script)
+	os.Chmod(filepath.Join(dir, "tools/x.sh"), 0o755)
+
+	// Need to know the project's workspace name — there's no workspace here,
+	// so fall back to :mkrk.x which should fail (no built-in x)
+	_, stderr, err := mkrk(t, dir, "tool", ":mkrk.x")
+	if err == nil {
+		t.Fatal("expected :mkrk.x to fail — no built-in tools registered")
+	}
+	if !strings.Contains(stderr, "no tool") {
+		t.Fatalf("expected 'no tool' error, got: %s", stderr)
+	}
+}

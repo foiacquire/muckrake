@@ -19,6 +19,8 @@ const (
 	ActionUnsign                RulesetActionType = "unsign"
 	ActionAttachPipeline        RulesetActionType = "attach_pipeline"
 	ActionAttachPipelineVirtual RulesetActionType = "attach_pipeline_virtual"
+	ActionMakeExecutable        RulesetActionType = "make_executable"
+	ActionGenerateCommand       RulesetActionType = "generate_command"
 )
 
 func ParseRulesetActionType(s string) (RulesetActionType, error) {
@@ -39,6 +41,10 @@ func ParseRulesetActionType(s string) (RulesetActionType, error) {
 		return ActionAttachPipeline, nil
 	case "attach_pipeline_virtual":
 		return ActionAttachPipelineVirtual, nil
+	case "make_executable":
+		return ActionMakeExecutable, nil
+	case "generate_command":
+		return ActionGenerateCommand, nil
 	default:
 		return "", fmt.Errorf("unknown ruleset action type: %s", s)
 	}
@@ -58,6 +64,10 @@ type RulesetActionConfig struct {
 	Tag             *string `json:"tag,omitempty"`
 	Pipeline        *string `json:"pipeline,omitempty"`
 	SignName        *string `json:"sign_name,omitempty"`
+
+	// generate_command
+	Verb      *string `json:"verb,omitempty"`
+	AutoScope *bool   `json:"auto_scope,omitempty"`
 }
 
 type RulesetRule struct {
