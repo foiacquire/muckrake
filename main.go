@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.foia.dev/muckrake/cmd"
 	"go.foia.dev/muckrake/internal/context"
 	"go.foia.dev/muckrake/internal/generator"
+	"go.foia.dev/muckrake/internal/reference"
 )
 
 type command struct {
@@ -29,7 +31,16 @@ var commands = map[string]command{
 
 const helpText = `mkrk — investigative journalism research management
 
-usage: mkrk <command> [args...]
+usage: mkrk [<subject>] <command> [args...]
+
+  subject is an optional :reference prefix naming what the command should
+  operate on. Without one, commands run in the current working directory.
+
+subjects:
+  :                     workspace-wide, iterate all projects
+  :project              a specific project
+  :project.category     a category within a project
+  :.category            category across all projects in workspace
 
 commands:
   init       initialize a project or workspace
@@ -44,8 +55,6 @@ commands:
   edit       open file in $EDITOR
 
 references:
-  Files are addressed using a structured query language.
-
   :project              all files in a project (workspace scope)
   :.category            category across all projects in workspace
   :project.category     specific project + category
@@ -70,70 +79,208 @@ references:
 `
 
 func main() {
-	if len(os.Args) < 2 {
+	args := os.Args[1:]
+	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, helpText)
 		os.Exit(1)
 	}
 
-	// Init is special — it creates context rather than consuming it
-	if os.Args[1] == "init" {
-		if err := cmd.RunInit(os.Args[2:]); err != nil {
+	// Init creates context rather than consuming it.
+	if args[0] == "init" {
+		if err := cmd.RunInit(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	verb := os.Args[1]
-	args := os.Args[2:]
-
-	if c, ok := commands[verb]; ok {
-		if err := dispatch(c, args); err != nil {
+	// Optional :ref prefix becomes the command subject.
+	var subject *reference.Reference
+	if strings.HasPrefix(args[0], ":") {
+		r, err := reference.ParseReference(args[0])
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		return
+		subject = r
+		args = args[1:]
 	}
 
-	if err := dispatchGenerated(verb, args); err != nil {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, helpText)
+		os.Exit(1)
+	}
+
+	verb := args[0]
+	cmdArgs := args[1:]
+
+	if err := run(verb, cmdArgs, subject); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// dispatchGenerated handles verbs registered by generate_command rules.
-// It resolves context once and routes to cmd.RunGenerated.
-func dispatchGenerated(verb string, args []string) error {
+func run(verb string, args []string, subject *reference.Reference) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	ctx, err := context.Discover(cwd)
+
+	d, err := resolveDispatch(cwd, subject)
 	if err != nil {
 		return err
 	}
-	defer ctx.Close()
+	defer d.close()
 
-	gens, err := generator.Collect(ctx)
+	if c, ok := commands[verb]; ok {
+		return runBuiltin(c, d, args)
+	}
+	return runGenerated(verb, d, args)
+}
+
+// dispatch holds the set of project contexts a command should run against,
+// plus an optional workspace context that owns the shared workspace DB.
+type dispatch struct {
+	workspace *context.Context
+	projects  []*context.Context
+	fallback  *context.Context
+}
+
+func (d *dispatch) close() {
+	for _, p := range d.projects {
+		p.Close()
+	}
+	if d.workspace != nil {
+		d.workspace.Close()
+	}
+	if d.fallback != nil {
+		d.fallback.Close()
+	}
+}
+
+func (d *dispatch) contexts() []*context.Context {
+	if len(d.projects) > 0 {
+		return d.projects
+	}
+	if d.fallback != nil {
+		return []*context.Context{d.fallback}
+	}
+	return nil
+}
+
+// resolveDispatch picks the contexts to run the verb against based on the
+// subject ref (if any) and the current working directory.
+func resolveDispatch(cwd string, subject *reference.Reference) (*dispatch, error) {
+	if subject != nil && subject.Kind == reference.KindWorkspace {
+		return dispatchFromWorkspaceSubject(cwd, subject)
+	}
+
+	ctx, err := context.Discover(cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	switch ctx.Kind {
+	case context.ContextProject:
+		ctx.Subject = subject
+		return &dispatch{fallback: ctx}, nil
+	case context.ContextWorkspace:
+		return iterateWorkspaceProjects(ctx, subject)
+	default:
+		ctx.Subject = subject
+		return &dispatch{fallback: ctx}, nil
+	}
+}
+
+func dispatchFromWorkspaceSubject(cwd string, subject *reference.Reference) (*dispatch, error) {
+	wsCtx, err := context.DiscoverWorkspace(cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	if !subject.WorkspaceWide && len(subject.Scope) > 0 {
+		projName := subject.Scope[0].Names[0]
+		proj, err := wsCtx.Workspace.Db.GetProjectByName(projName)
+		if err != nil {
+			wsCtx.Close()
+			return nil, err
+		}
+		if proj == nil {
+			wsCtx.Close()
+			return nil, fmt.Errorf("project %q not found in workspace", projName)
+		}
+		projRoot := filepath.Join(wsCtx.Workspace.Root, proj.Path)
+		pctx, err := context.OpenProjectContext(projRoot, projName, wsCtx.Workspace)
+		if err != nil {
+			wsCtx.Close()
+			return nil, err
+		}
+		pctx.Subject = subject
+		return &dispatch{workspace: wsCtx, projects: []*context.Context{pctx}}, nil
+	}
+
+	return iterateWorkspaceProjects(wsCtx, subject)
+}
+
+func iterateWorkspaceProjects(wsCtx *context.Context, subject *reference.Reference) (*dispatch, error) {
+	projects, err := wsCtx.Workspace.Db.ListProjects()
+	if err != nil {
+		wsCtx.Close()
+		return nil, err
+	}
+	if len(projects) == 0 {
+		wsCtx.Close()
+		return nil, fmt.Errorf("no projects registered in workspace")
+	}
+
+	var pctxs []*context.Context
+	for _, p := range projects {
+		projRoot := filepath.Join(wsCtx.Workspace.Root, p.Path)
+		if !fileExists(filepath.Join(projRoot, ".mkrk")) {
+			continue
+		}
+		pctx, err := context.OpenProjectContext(projRoot, p.Name, wsCtx.Workspace)
+		if err != nil {
+			continue
+		}
+		pctx.Subject = subject
+		pctxs = append(pctxs, pctx)
+	}
+	return &dispatch{workspace: wsCtx, projects: pctxs}, nil
+}
+
+func runBuiltin(c command, d *dispatch, args []string) error {
+	ctxs := d.contexts()
+	if len(ctxs) == 0 {
+		return fmt.Errorf("no context available")
+	}
+	var lastErr error
+	for _, ctx := range ctxs {
+		if err := c.run(ctx, args); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func runGenerated(verb string, d *dispatch, args []string) error {
+	ctxs := d.contexts()
+	if len(ctxs) == 0 {
+		return fmt.Errorf("no context available")
+	}
+	gens, err := generator.Collect(ctxs[0])
 	if err != nil {
 		return err
 	}
 	if err := checkVerbCollisions(gens); err != nil {
 		return err
 	}
-
-	hasVerb := false
 	for _, g := range gens {
 		if g.Verb == verb {
-			hasVerb = true
-			break
+			return cmd.RunGenerated(ctxs, gens, verb, args)
 		}
 	}
-	if !hasVerb {
-		return fmt.Errorf("unknown command: %s", verb)
-	}
-
-	return cmd.RunGenerated(ctx, gens, verb, args)
+	return fmt.Errorf("unknown command: %s", verb)
 }
 
 func checkVerbCollisions(gens []generator.Generator) error {
@@ -144,59 +291,6 @@ func checkVerbCollisions(gens []generator.Generator) error {
 		}
 	}
 	return nil
-}
-
-func dispatch(c command, args []string) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	ctx, err := context.Discover(cwd)
-	if err != nil {
-		return err
-	}
-
-	// If at workspace root (not inside a project), dispatch to each project
-	if ctx.Kind == context.ContextWorkspace {
-		return dispatchWorkspace(c, ctx, args)
-	}
-
-	defer ctx.Close()
-	return c.run(ctx, args)
-}
-
-func dispatchWorkspace(c command, wsCtx *context.Context, args []string) error {
-	defer wsCtx.Close()
-
-	projects, err := wsCtx.Workspace.Db.ListProjects()
-	if err != nil {
-		return err
-	}
-	if len(projects) == 0 {
-		return fmt.Errorf("no projects registered in workspace")
-	}
-
-	var lastErr error
-	for _, p := range projects {
-		projRoot := filepath.Join(wsCtx.Workspace.Root, p.Path)
-		if !fileExists(filepath.Join(projRoot, ".mkrk")) {
-			continue
-		}
-
-		projCtx, err := context.OpenProjectContext(projRoot, p.Name, wsCtx.Workspace)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		if err := c.run(projCtx, args); err != nil {
-			lastErr = err
-		}
-		projCtx.Close()
-	}
-
-	return lastErr
 }
 
 func fileExists(path string) bool {

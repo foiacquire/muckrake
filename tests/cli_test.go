@@ -336,20 +336,60 @@ func TestToolUnknownName(t *testing.T) {
 	}
 }
 
-func TestToolResolvesRefArgs(t *testing.T) {
-	dir := initTestProject(t)
-	createTestFile(t, dir, "evidence/a.txt", "alpha")
-	createTestFile(t, dir, "evidence/b.txt", "beta")
-	mustMkrk(t, dir, "sync")
+func TestSubjectTargetsSpecificProject(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+	mustMkrk(t, wsDir, "init", "beta")
 
-	// cat-equivalent: echoes each path, so output should list both files.
+	createTestFile(t, wsDir, "projects/alpha/evidence/a.txt", "alpha content")
+	createTestFile(t, wsDir, "projects/beta/evidence/b.txt", "beta content")
+	mustMkrk(t, wsDir, "sync")
+
+	// :alpha list should only show alpha files, not beta.
+	stdout, _ := mustMkrk(t, wsDir, ":alpha", "list")
+	if !strings.Contains(stdout, ":alpha") {
+		t.Fatalf("expected :alpha in output, got: %s", stdout)
+	}
+	if strings.Contains(stdout, ":beta") {
+		t.Fatalf("did not expect :beta in output, got: %s", stdout)
+	}
+}
+
+func TestSubjectUnknownProject(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+
+	_, stderr, err := mkrk(t, wsDir, ":nonexistent", "list")
+	if err == nil {
+		t.Fatal("expected :nonexistent subject to fail")
+	}
+	if !strings.Contains(stderr, "not found") {
+		t.Fatalf("expected 'not found' error, got: %s", stderr)
+	}
+}
+
+func TestToolSubjectAppendsFiles(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+
+	projDir := filepath.Join(wsDir, "projects/alpha")
+	createTestFile(t, wsDir, "projects/alpha/evidence/a.txt", "alpha")
+	createTestFile(t, wsDir, "projects/alpha/evidence/b.txt", "beta")
+	mustMkrk(t, projDir, "sync")
+
 	script := "#!/bin/sh\nfor f in \"$@\"; do echo \"$f\"; done\n"
-	createTestFile(t, dir, "tools/ls.sh", script)
-	os.Chmod(filepath.Join(dir, "tools/ls.sh"), 0o755)
+	createTestFile(t, wsDir, "projects/alpha/tools/ls.sh", script)
+	os.Chmod(filepath.Join(projDir, "tools/ls.sh"), 0o755)
 
-	stdout, stderr, err := mkrk(t, dir, "tool", "ls", ":evidence")
+	// Subject goes before the verb. evidence files append to tool argv.
+	stdout, stderr, err := mkrk(t, wsDir, ":alpha.evidence", "tool", "ls")
 	if err != nil {
-		t.Fatalf("tool ls :evidence failed: %v\nstderr: %s", err, stderr)
+		t.Fatalf("tool failed: %v\nstderr: %s", err, stderr)
 	}
 	if !strings.Contains(stdout, "evidence/a.txt") || !strings.Contains(stdout, "evidence/b.txt") {
 		t.Fatalf("expected both evidence files in output, got: %s", stdout)

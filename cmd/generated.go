@@ -14,14 +14,22 @@ import (
 	"go.foia.dev/muckrake/internal/generator"
 	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
+	"go.foia.dev/muckrake/internal/reference"
 	"go.foia.dev/muckrake/internal/resolve"
 	"go.foia.dev/muckrake/internal/walk"
 )
 
 // RunGenerated dispatches a generated verb (e.g. "tool") to the correct
 // generator based on the first argument, then executes the resolved tool
-// file with the remaining arguments.
-func RunGenerated(ctx *context.Context, gens []generator.Generator, verb string, args []string) error {
+// file with the remaining arguments. Tools always execute once; when the
+// subject spans multiple projects (workspace-wide refs), files from every
+// context are aggregated into a single invocation.
+func RunGenerated(ctxs []*context.Context, gens []generator.Generator, verb string, args []string) error {
+	if len(ctxs) == 0 {
+		return fmt.Errorf("%s: no context", verb)
+	}
+	primary := ctxs[0]
+
 	if len(args) == 0 {
 		return fmt.Errorf("%s: expected tool name as first argument", verb)
 	}
@@ -35,17 +43,73 @@ func RunGenerated(ctx *context.Context, gens []generator.Generator, verb string,
 		return fmt.Errorf("%s: empty tool name", verb)
 	}
 
-	gen, toolPath, err := resolveTool(args[0], applicable, ctx)
+	gen, toolPath, err := resolveTool(args[0], applicable, primary)
 	if err != nil {
 		return err
 	}
 
-	toolArgs, inputPaths, err := resolveToolArgs(args[1:], ctx)
-	if err != nil {
-		return err
+	var inputPaths []string
+	for _, ctx := range ctxs {
+		paths, err := subjectPaths(ctx)
+		if err != nil {
+			return err
+		}
+		inputPaths = append(inputPaths, paths...)
 	}
+	toolArgs := append(append([]string(nil), args[1:]...), inputPaths...)
 
-	return execTool(gen, toolPath, toolArgs, inputPaths, ctx)
+	return execTool(gen, toolPath, toolArgs, inputPaths, primary)
+}
+
+// subjectPaths resolves the command's subject (if any) into absolute file
+// paths. Returns nil/empty when there is no subject or nothing matches.
+func subjectPaths(ctx *context.Context) ([]string, error) {
+	if ctx == nil || ctx.Subject == nil {
+		return nil, nil
+	}
+	// Format the reference back into a string the resolver understands.
+	// The resolver accepts the same grammar as the parser.
+	raw := formatSubject(ctx.Subject)
+	if raw == "" {
+		return nil, nil
+	}
+	return resolve.Ref(ctx, raw)
+}
+
+// formatSubject produces a resolver-consumable string from a parsed subject.
+// It strips the project prefix since resolve.Ref runs in a per-project
+// context and only needs the remaining scope path. Tags and globs are not
+// yet round-tripped — the resolver doesn't respect them.
+func formatSubject(r *reference.Reference) string {
+	if r == nil {
+		return ""
+	}
+	switch r.Kind {
+	case reference.KindWorkspace:
+		if r.WorkspaceWide {
+			return joinScopes(r.Scope)
+		}
+		if len(r.Scope) > 1 {
+			return joinScopes(r.Scope[1:])
+		}
+		return ""
+	case reference.KindContext:
+		return joinScopes(r.Scope)
+	case reference.KindBarePath:
+		return r.Raw
+	}
+	return ""
+}
+
+func joinScopes(levels []reference.ScopeLevel) string {
+	var parts []string
+	for _, l := range levels {
+		if len(l.Names) == 0 {
+			continue
+		}
+		parts = append(parts, l.Names[0])
+	}
+	return strings.Join(parts, ".")
 }
 
 func filterByVerb(gens []generator.Generator, verb string) []generator.Generator {
@@ -171,28 +235,6 @@ func currentProjectName(ctx *context.Context) string {
 		return *ctx.ProjectName
 	}
 	return ""
-}
-
-// resolveToolArgs expands reference-style arguments into absolute paths.
-// Args starting with ':' are resolved via the reference engine; all other
-// args pass through verbatim so tools can still receive flags and literals.
-// Returns (tool-argv, input-paths) — input-paths are reference-resolved
-// files used later for provenance.
-func resolveToolArgs(args []string, ctx *context.Context) ([]string, []string, error) {
-	var out, inputs []string
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, ":") {
-			out = append(out, arg)
-			continue
-		}
-		paths, err := resolve.Ref(ctx, arg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("resolve %s: %w", arg, err)
-		}
-		out = append(out, paths...)
-		inputs = append(inputs, paths...)
-	}
-	return out, inputs, nil
 }
 
 // execTool runs the resolved tool file with the given arguments, passing

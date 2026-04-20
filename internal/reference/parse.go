@@ -50,6 +50,14 @@ func ParseReference(input string) (*Reference, error) {
 
 func parseStructured(original, rest string, kind ReferenceKind) (*Reference, error) {
 	pos := 0
+	workspaceWide := false
+	if pos < len(rest) && rest[pos] == '.' {
+		pos++
+		if kind == KindWorkspace {
+			workspaceWide = true
+		}
+	}
+
 	scope, err := parseScope(rest, &pos)
 	if err != nil {
 		return nil, err
@@ -66,10 +74,11 @@ func parseStructured(original, rest string, kind ReferenceKind) (*Reference, err
 	}
 
 	return &Reference{
-		Kind:  kind,
-		Scope: scope,
-		Tags:  tags,
-		Glob:  glob,
+		Kind:          kind,
+		WorkspaceWide: workspaceWide,
+		Scope:         scope,
+		Tags:          tags,
+		Glob:          glob,
 	}, nil
 }
 
@@ -80,10 +89,6 @@ func parseScope(input string, pos *int) ([]ScopeLevel, error) {
 		ch := input[*pos]
 		if ch == '!' || ch == '/' {
 			break
-		}
-		if ch == '.' && len(levels) == 0 {
-			*pos++
-			continue
 		}
 
 		level, err := parseScopeLevel(input, pos)

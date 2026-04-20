@@ -98,8 +98,21 @@ func TestParseLeadingDot(t *testing.T) {
 	if r.Kind != KindWorkspace {
 		t.Fatalf("expected workspace, got %v", r.Kind)
 	}
+	if !r.WorkspaceWide {
+		t.Fatal("expected WorkspaceWide=true for :.sources")
+	}
 	if len(r.Scope) != 1 || r.Scope[0].Names[0] != "sources" {
 		t.Fatalf("expected scope [sources], got %v", r.Scope)
+	}
+}
+
+func TestParseWorkspaceProjectNotWorkspaceWide(t *testing.T) {
+	r, err := ParseReference(":bailey")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.WorkspaceWide {
+		t.Fatal("expected WorkspaceWide=false for :bailey")
 	}
 }
 

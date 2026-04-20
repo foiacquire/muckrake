@@ -11,11 +11,15 @@ const (
 
 // Reference is a parsed query in the muckrake reference language.
 type Reference struct {
-	Kind  ReferenceKind
-	Scope []ScopeLevel
-	Tags  []TagFilter
-	Glob  *string
-	Raw   string // original input for bare paths
+	Kind ReferenceKind
+	// WorkspaceWide is true for refs of the form ":.name" — a workspace-wide
+	// scope, as opposed to ":name" which names a specific project.
+	// Meaningful only when Kind == KindWorkspace.
+	WorkspaceWide bool
+	Scope         []ScopeLevel
+	Tags          []TagFilter
+	Glob          *string
+	Raw           string // original input for bare paths
 }
 
 // ScopeLevel is one dot-separated level in a reference.
