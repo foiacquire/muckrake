@@ -407,6 +407,72 @@ func TestSubjectUnknownProject(t *testing.T) {
 	}
 }
 
+func TestToolFromWorkspaceRootFindsProjectTool(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+
+	script := "#!/bin/sh\necho hello-from-alpha\n"
+	createTestFile(t, wsDir, "projects/alpha/tools/greet.sh", script)
+	os.Chmod(filepath.Join(wsDir, "projects/alpha/tools/greet.sh"), 0o755)
+
+	// Workspace root, bare tool name — should find alpha's tool.
+	stdout, stderr, err := mkrk(t, wsDir, "tool", "greet")
+	if err != nil {
+		t.Fatalf("tool greet failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "hello-from-alpha") {
+		t.Fatalf("expected alpha's tool output, got: %s", stdout)
+	}
+}
+
+func TestToolAmbiguousAcrossProjects(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+	mustMkrk(t, wsDir, "init", "beta")
+
+	script := "#!/bin/sh\necho hi\n"
+	createTestFile(t, wsDir, "projects/alpha/tools/greet.sh", script)
+	createTestFile(t, wsDir, "projects/beta/tools/greet.sh", script)
+	os.Chmod(filepath.Join(wsDir, "projects/alpha/tools/greet.sh"), 0o755)
+	os.Chmod(filepath.Join(wsDir, "projects/beta/tools/greet.sh"), 0o755)
+
+	_, stderr, err := mkrk(t, wsDir, "tool", "greet")
+	if err == nil {
+		t.Fatal("expected ambiguous tool to fail")
+	}
+	if !strings.Contains(stderr, "ambiguous") {
+		t.Fatalf("expected ambiguity error, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, ":alpha.greet") || !strings.Contains(stderr, ":beta.greet") {
+		t.Fatalf("expected disambiguation hints, got: %s", stderr)
+	}
+}
+
+func TestToolExplicitProjectDisambiguates(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+	mustMkrk(t, wsDir, "init", "beta")
+
+	createTestFile(t, wsDir, "projects/alpha/tools/greet.sh", "#!/bin/sh\necho alpha\n")
+	createTestFile(t, wsDir, "projects/beta/tools/greet.sh", "#!/bin/sh\necho beta\n")
+	os.Chmod(filepath.Join(wsDir, "projects/alpha/tools/greet.sh"), 0o755)
+	os.Chmod(filepath.Join(wsDir, "projects/beta/tools/greet.sh"), 0o755)
+
+	stdout, stderr, err := mkrk(t, wsDir, ":beta", "tool", "greet")
+	if err != nil {
+		t.Fatalf(":beta tool greet failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "beta") || strings.Contains(stdout, "alpha") {
+		t.Fatalf("expected beta only, got: %s", stdout)
+	}
+}
+
 func TestToolSubjectAppendsFiles(t *testing.T) {
 	wsDir := filepath.Join(t.TempDir(), "workspace")
 	os.MkdirAll(wsDir, 0o755)

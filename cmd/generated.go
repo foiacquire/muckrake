@@ -91,30 +91,36 @@ func resolveTool(arg string, gens []generator.Generator, ctx *context.Context) (
 		return generator.Generator{}, "", fmt.Errorf("no generator for project %q", explicitProject)
 	}
 
-	// Bare name: prefer current project, fall back to builtins.
-	current := currentProjectName(ctx)
-	var ordered []generator.Generator
-	for _, g := range gens {
-		if g.ProjectName == current {
-			ordered = append(ordered, g)
-		}
+	type match struct {
+		gen  generator.Generator
+		path string
 	}
+	var matches []match
 	for _, g := range gens {
-		if g.ProjectName != current {
-			ordered = append(ordered, g)
-		}
-	}
-
-	for _, g := range ordered {
 		path, err := findToolFile(g, toolName)
 		if err != nil {
 			return generator.Generator{}, "", err
 		}
 		if path != "" {
-			return g, path, nil
+			matches = append(matches, match{gen: g, path: path})
 		}
 	}
-	return generator.Generator{}, "", fmt.Errorf("no tool %q found (use :project.name to disambiguate)", toolName)
+
+	if len(matches) == 0 {
+		return generator.Generator{}, "", fmt.Errorf("no tool %q found", toolName)
+	}
+	if len(matches) == 1 {
+		return matches[0].gen, matches[0].path, nil
+	}
+
+	var names []string
+	for _, m := range matches {
+		names = append(names, fmt.Sprintf(":%s.%s", m.gen.ProjectName, toolName))
+	}
+	return generator.Generator{}, "", fmt.Errorf(
+		"tool %q is ambiguous, choose one: %s",
+		toolName, strings.Join(names, ", "),
+	)
 }
 
 // splitProjectAndName pulls an explicit project prefix from a reference-style
@@ -176,13 +182,6 @@ func stripExt(name string) string {
 		return name
 	}
 	return name[:len(name)-len(ext)]
-}
-
-func currentProjectName(ctx *context.Context) string {
-	if ctx != nil && ctx.ProjectName != nil {
-		return *ctx.ProjectName
-	}
-	return ""
 }
 
 // execTool runs the resolved tool file with the given arguments, passing

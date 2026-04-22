@@ -268,7 +268,7 @@ func runGenerated(verb string, d *dispatch, args []string) error {
 	if len(ctxs) == 0 {
 		return fmt.Errorf("no context available")
 	}
-	gens, err := generator.Collect(ctxs[0])
+	gens, err := generator.Collect(ctxs...)
 	if err != nil {
 		return err
 	}

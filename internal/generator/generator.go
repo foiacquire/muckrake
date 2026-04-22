@@ -18,23 +18,32 @@ type Generator struct {
 	IsBuiltin   bool
 }
 
-// Collect returns all generators visible from the current context, including
-// built-in :mkrk generators.
-func Collect(ctx *context.Context) ([]Generator, error) {
+// Collect returns all generators visible from the given contexts, including
+// built-in :mkrk generators. Projects contribute generators from their own
+// rulesets. Duplicate generators (same project + scope + verb) are
+// collapsed.
+func Collect(ctxs ...*context.Context) ([]Generator, error) {
 	gens := Builtins()
-
-	if ctx.Kind == context.ContextProject {
+	seen := make(map[string]bool)
+	for _, ctx := range ctxs {
+		if ctx == nil || ctx.Kind != context.ContextProject {
+			continue
+		}
 		projName := ""
 		if ctx.ProjectName != nil {
 			projName = *ctx.ProjectName
 		}
+		key := projName + "\x00" + ctx.ProjectRoot
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		projGens, err := collectFromProject(ctx.ProjectDb, projName, ctx.ProjectRoot)
 		if err != nil {
 			return nil, err
 		}
 		gens = append(gens, projGens...)
 	}
-
 	return gens, nil
 }
 
