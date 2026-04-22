@@ -13,6 +13,24 @@ import (
 // Ref returns absolute paths of files matching the given reference string
 // within the current project context. An empty slice means no matches.
 func Ref(ctx *context.Context, raw string) ([]string, error) {
+	rels, err := RefRelPaths(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, rel := range rels {
+		if filepath.IsAbs(rel) {
+			paths = append(paths, rel)
+			continue
+		}
+		paths = append(paths, filepath.Join(ctx.ProjectRoot, rel))
+	}
+	return paths, nil
+}
+
+// RefRelPaths returns matching paths relative to the project root. Bare
+// paths (e.g. ./foo or ../foo) pass through unchanged.
+func RefRelPaths(ctx *context.Context, raw string) ([]string, error) {
 	ref, err := reference.ParseReference(raw)
 	if err != nil {
 		return nil, err
@@ -35,14 +53,14 @@ func Ref(ctx *context.Context, raw string) ([]string, error) {
 		return nil, err
 	}
 
-	var paths []string
+	var rels []string
 	for _, relPath := range entries {
 		if !globMatches(ref, relPath) {
 			continue
 		}
-		paths = append(paths, filepath.Join(ctx.ProjectRoot, relPath))
+		rels = append(rels, relPath)
 	}
-	return paths, nil
+	return rels, nil
 }
 
 func patternsForRef(ctx *context.Context, ref *reference.Reference) ([]string, error) {

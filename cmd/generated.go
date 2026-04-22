@@ -14,7 +14,6 @@ import (
 	"go.foia.dev/muckrake/internal/generator"
 	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
-	"go.foia.dev/muckrake/internal/reference"
 	"go.foia.dev/muckrake/internal/resolve"
 	"go.foia.dev/muckrake/internal/walk"
 )
@@ -50,7 +49,7 @@ func RunGenerated(ctxs []*context.Context, gens []generator.Generator, verb stri
 
 	var inputPaths []string
 	for _, ctx := range ctxs {
-		paths, err := subjectPaths(ctx)
+		paths, err := resolve.SubjectFiles(ctx)
 		if err != nil {
 			return err
 		}
@@ -59,57 +58,6 @@ func RunGenerated(ctxs []*context.Context, gens []generator.Generator, verb stri
 	toolArgs := append(append([]string(nil), args[1:]...), inputPaths...)
 
 	return execTool(gen, toolPath, toolArgs, inputPaths, primary)
-}
-
-// subjectPaths resolves the command's subject (if any) into absolute file
-// paths. Returns nil/empty when there is no subject or nothing matches.
-func subjectPaths(ctx *context.Context) ([]string, error) {
-	if ctx == nil || ctx.Subject == nil {
-		return nil, nil
-	}
-	// Format the reference back into a string the resolver understands.
-	// The resolver accepts the same grammar as the parser.
-	raw := formatSubject(ctx.Subject)
-	if raw == "" {
-		return nil, nil
-	}
-	return resolve.Ref(ctx, raw)
-}
-
-// formatSubject produces a resolver-consumable string from a parsed subject.
-// It strips the project prefix since resolve.Ref runs in a per-project
-// context and only needs the remaining scope path. Tags and globs are not
-// yet round-tripped — the resolver doesn't respect them.
-func formatSubject(r *reference.Reference) string {
-	if r == nil {
-		return ""
-	}
-	switch r.Kind {
-	case reference.KindWorkspace:
-		if r.WorkspaceWide {
-			return joinScopes(r.Scope)
-		}
-		if len(r.Scope) > 1 {
-			return joinScopes(r.Scope[1:])
-		}
-		return ""
-	case reference.KindContext:
-		return joinScopes(r.Scope)
-	case reference.KindBarePath:
-		return r.Raw
-	}
-	return ""
-}
-
-func joinScopes(levels []reference.ScopeLevel) string {
-	var parts []string
-	for _, l := range levels {
-		if len(l.Names) == 0 {
-			continue
-		}
-		parts = append(parts, l.Names[0])
-	}
-	return strings.Join(parts, ".")
 }
 
 func filterByVerb(gens []generator.Generator, verb string) []generator.Generator {

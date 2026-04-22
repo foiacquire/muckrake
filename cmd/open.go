@@ -7,6 +7,7 @@ import (
 	"os/exec"
 
 	"go.foia.dev/muckrake/internal/context"
+	"go.foia.dev/muckrake/internal/resolve"
 )
 
 func RunOpen(ctx *context.Context, args []string) error {
@@ -21,14 +22,11 @@ func runExternalViewer(ctx *context.Context, args []string, action, defaultCmd s
 	fs := flag.NewFlagSet(action, flag.ExitOnError)
 	fs.Parse(args)
 
-	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: mkrk %s <reference>", action)
-	}
 	if ctx.Kind != context.ContextProject {
 		return fmt.Errorf("not in a project")
 	}
 
-	paths, err := resolveToFilePaths(ctx, fs.Arg(0))
+	paths, err := singleFileTarget(ctx, fs.Args(), action)
 	if err != nil {
 		return err
 	}
@@ -44,6 +42,16 @@ func runExternalViewer(ctx *context.Context, args []string, action, defaultCmd s
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func singleFileTarget(ctx *context.Context, args []string, action string) ([]string, error) {
+	if resolve.HasNarrowSubject(ctx) {
+		return resolve.SubjectFiles(ctx)
+	}
+	if len(args) == 0 {
+		return nil, fmt.Errorf("usage: mkrk :<ref> %s  |  mkrk %s <reference>", action, action)
+	}
+	return resolve.Ref(ctx, args[0])
 }
 
 func envOrDefault(key, fallback string) string {

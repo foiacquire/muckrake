@@ -9,8 +9,7 @@ import (
 	"go.foia.dev/muckrake/internal/evaluate"
 	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
-	"go.foia.dev/muckrake/internal/reference"
-	"go.foia.dev/muckrake/internal/walk"
+	"go.foia.dev/muckrake/internal/resolve"
 )
 
 func RunStatus(ctx *context.Context, args []string) error {
@@ -21,6 +20,13 @@ func RunStatus(ctx *context.Context, args []string) error {
 		return fmt.Errorf("not in a muckrake project or workspace")
 	}
 
+	if resolve.HasNarrowSubject(ctx) {
+		rels, err := resolve.SubjectRelPaths(ctx)
+		if err != nil {
+			return err
+		}
+		return fileStatusPaths(ctx, rels)
+	}
 	if fs.NArg() > 0 {
 		return fileStatus(ctx, fs.Args())
 	}
@@ -69,14 +75,21 @@ func fileStatus(ctx *context.Context, refs []string) error {
 	}
 
 	for _, rawRef := range refs {
-		paths, err := resolveToRelPaths(ctx, rawRef)
+		paths, err := resolve.RefRelPaths(ctx, rawRef)
 		if err != nil {
 			return err
 		}
-		for _, relPath := range paths {
-			if err := printFileStatus(ctx, relPath); err != nil {
-				return err
-			}
+		if err := fileStatusPaths(ctx, paths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fileStatusPaths(ctx *context.Context, rels []string) error {
+	for _, relPath := range rels {
+		if err := printFileStatus(ctx, relPath); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -173,39 +186,3 @@ func derivePipelineState(ctx *context.Context, file *models.TrackedFile, p *mode
 	return current
 }
 
-func resolveToRelPaths(ctx *context.Context, rawRef string) ([]string, error) {
-	ref, err := reference.ParseReference(rawRef)
-	if err != nil {
-		return nil, err
-	}
-
-	if ref.Kind == reference.KindBarePath {
-		return []string{ref.Raw}, nil
-	}
-
-	if len(ref.Scope) == 0 {
-		return nil, fmt.Errorf("reference must specify a scope")
-	}
-
-	catName := ref.Scope[0].Names[0]
-	patterns, err := walk.CategoryPatterns(ctx.ProjectDb, &catName)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := walk.WalkAndCollect(ctx.ProjectRoot, patterns)
-	if err != nil {
-		return nil, err
-	}
-
-	if ref.Glob != nil {
-		var filtered []string
-		for _, relPath := range entries {
-			fileName := filepath.Base(relPath)
-			if ok, _ := reference.GlobMatchFile(*ref.Glob, fileName, relPath); ok {
-				filtered = append(filtered, relPath)
-			}
-		}
-		return filtered, nil
-	}
-	return entries, nil
-}

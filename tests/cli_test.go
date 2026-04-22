@@ -357,6 +357,42 @@ func TestSubjectTargetsSpecificProject(t *testing.T) {
 	}
 }
 
+func TestSubjectTagAndStatus(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+
+	createTestFile(t, wsDir, "projects/alpha/evidence/doc.txt", "content")
+	mustMkrk(t, wsDir, "sync")
+
+	// Tag via subject: no positional ref arg needed.
+	_, stderr := mustMkrk(t, wsDir, ":alpha.evidence", "tag", "important")
+	if !strings.Contains(stderr, "important") {
+		t.Fatalf("expected tag confirmation, got: %s", stderr)
+	}
+
+	// Status via subject should show the tag.
+	stdout, _ := mustMkrk(t, wsDir, ":alpha.evidence", "status")
+	if !strings.Contains(stdout, "important") {
+		t.Fatalf("expected tag in status, got: %s", stdout)
+	}
+}
+
+func TestSubjectReadFile(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+	createTestFile(t, wsDir, "projects/alpha/evidence/note.txt", "secret content\n")
+	mustMkrk(t, wsDir, "sync")
+
+	stdout, _ := mustMkrk(t, wsDir, ":alpha.evidence", "read")
+	if !strings.Contains(stdout, "secret content") {
+		t.Fatalf("expected file content, got: %s", stdout)
+	}
+}
+
 func TestSubjectUnknownProject(t *testing.T) {
 	wsDir := filepath.Join(t.TempDir(), "workspace")
 	os.MkdirAll(wsDir, 0o755)

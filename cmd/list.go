@@ -10,6 +10,7 @@ import (
 	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
 	"go.foia.dev/muckrake/internal/reference"
+	"go.foia.dev/muckrake/internal/resolve"
 	"go.foia.dev/muckrake/internal/walk"
 )
 
@@ -26,10 +27,24 @@ func RunList(ctx *context.Context, args []string) error {
 		projectName = *ctx.ProjectName
 	}
 
+	if resolve.HasNarrowSubject(ctx) {
+		return listSubjectFiles(ctx, projectName)
+	}
 	if fs.NArg() > 0 {
 		return listRefFiles(ctx, projectName, fs.Args())
 	}
 	return listAllFiles(ctx, projectName)
+}
+
+func listSubjectFiles(ctx *context.Context, projectName string) error {
+	rels, err := resolve.SubjectRelPaths(ctx)
+	if err != nil {
+		return err
+	}
+	for _, relPath := range rels {
+		fmt.Println(reference.FormatRef(relPath, projectName, ctx.ProjectDb))
+	}
+	return nil
 }
 
 func listAllFiles(ctx *context.Context, projectName string) error {

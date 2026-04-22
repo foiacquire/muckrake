@@ -9,6 +9,7 @@ import (
 	"go.foia.dev/muckrake/internal/context"
 	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/materialize"
+	"go.foia.dev/muckrake/internal/resolve"
 )
 
 func RunTag(ctx *context.Context, args []string) error {
@@ -17,18 +18,11 @@ func RunTag(ctx *context.Context, args []string) error {
 	fs.BoolVar(remove, "r", false, "shorthand for --remove")
 	fs.Parse(args)
 
-	if fs.NArg() < 2 {
-		return fmt.Errorf("usage: mkrk tag [--remove] <reference> <tag>")
-	}
-
 	if ctx.Kind != context.ContextProject {
 		return fmt.Errorf("not in a project")
 	}
 
-	rawRef := fs.Arg(0)
-	tagName := fs.Arg(1)
-
-	paths, err := resolveToRelPaths(ctx, rawRef)
+	paths, tagName, err := tagTargets(ctx, fs.Args())
 	if err != nil {
 		return err
 	}
@@ -72,4 +66,27 @@ func RunTag(ctx *context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+// tagTargets picks the file set to tag. With a subject the positional args
+// are just (tag), otherwise they are (reference, tag).
+func tagTargets(ctx *context.Context, args []string) ([]string, string, error) {
+	if resolve.HasNarrowSubject(ctx) {
+		if len(args) < 1 {
+			return nil, "", fmt.Errorf("usage: mkrk :<ref> tag [--remove] <tag>")
+		}
+		rels, err := resolve.SubjectRelPaths(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		return rels, args[0], nil
+	}
+	if len(args) < 2 {
+		return nil, "", fmt.Errorf("usage: mkrk tag [--remove] <reference> <tag>")
+	}
+	rels, err := resolve.RefRelPaths(ctx, args[0])
+	if err != nil {
+		return nil, "", err
+	}
+	return rels, args[1], nil
 }

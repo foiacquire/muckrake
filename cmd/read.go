@@ -6,12 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"go.foia.dev/muckrake/internal/context"
-	"go.foia.dev/muckrake/internal/models"
-	"go.foia.dev/muckrake/internal/reference"
-	"go.foia.dev/muckrake/internal/walk"
+	"go.foia.dev/muckrake/internal/resolve"
 )
 
 func RunRead(ctx *context.Context, args []string) error {
@@ -20,33 +17,29 @@ func RunRead(ctx *context.Context, args []string) error {
 	pathFlag := fs.Bool("path", false, "show file path before content")
 	fs.Parse(args)
 
-	if fs.NArg() == 0 {
-		return fmt.Errorf("usage: mkrk read <reference> [references...]")
-	}
 	if ctx.Kind != context.ContextProject {
 		return fmt.Errorf("not in a project")
 	}
 
+	paths, err := readTargets(ctx, fs.Args())
+	if err != nil {
+		return err
+	}
+
 	total := 0
-	for _, rawRef := range fs.Args() {
-		paths, err := resolveToFilePaths(ctx, rawRef)
-		if err != nil {
+	for _, absPath := range paths {
+		if total > 0 {
+			fmt.Println()
+		}
+		if *pathFlag && !*raw {
+			fmt.Printf("\033[1m%s\033[0m\n", absPath)
+		} else if *pathFlag {
+			fmt.Println(absPath)
+		}
+		if err := dumpContent(absPath, !*raw); err != nil {
 			return err
 		}
-		for _, absPath := range paths {
-			if total > 0 {
-				fmt.Println()
-			}
-			if *pathFlag && !*raw {
-				fmt.Printf("\033[1m%s\033[0m\n", absPath)
-			} else if *pathFlag {
-				fmt.Println(absPath)
-			}
-			if err := dumpContent(absPath, !*raw); err != nil {
-				return err
-			}
-			total++
-		}
+		total++
 	}
 
 	if total == 0 {
@@ -55,47 +48,22 @@ func RunRead(ctx *context.Context, args []string) error {
 	return nil
 }
 
-func resolveToFilePaths(ctx *context.Context, rawRef string) ([]string, error) {
-	ref, err := reference.ParseReference(rawRef)
-	if err != nil {
-		return nil, err
+func readTargets(ctx *context.Context, args []string) ([]string, error) {
+	if resolve.HasNarrowSubject(ctx) {
+		return resolve.SubjectFiles(ctx)
 	}
-
-	if ref.Kind == reference.KindBarePath {
-		abs := filepath.Join(ctx.ProjectRoot, ref.Raw)
-		if _, err := os.Stat(abs); err != nil {
-			return nil, fmt.Errorf("file not found: %s", ref.Raw)
+	if len(args) == 0 {
+		return nil, fmt.Errorf("usage: mkrk :<ref> read  |  mkrk read <reference> [...]")
+	}
+	var all []string
+	for _, raw := range args {
+		paths, err := resolve.Ref(ctx, raw)
+		if err != nil {
+			return nil, err
 		}
-		return []string{abs}, nil
+		all = append(all, paths...)
 	}
-
-	if len(ref.Scope) == 0 {
-		return nil, fmt.Errorf("reference must specify a scope")
-	}
-
-	catName := ref.Scope[0].Names[0]
-	patterns, err := walk.CategoryPatterns(ctx.ProjectDb, &catName)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := walk.WalkAndCollect(ctx.ProjectRoot, patterns)
-	if err != nil {
-		return nil, err
-	}
-
-	var paths []string
-	for _, relPath := range entries {
-		if ref.Glob != nil {
-			fileName := filepath.Base(relPath)
-			mf, _ := models.GlobMatch(*ref.Glob, fileName)
-			mp, _ := models.GlobMatch(*ref.Glob, relPath)
-			if !mf && !mp {
-				continue
-			}
-		}
-		paths = append(paths, filepath.Join(ctx.ProjectRoot, relPath))
-	}
-	return paths, nil
+	return all, nil
 }
 
 func dumpContent(path string, colorize bool) error {

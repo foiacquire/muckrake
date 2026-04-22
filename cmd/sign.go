@@ -11,6 +11,7 @@ import (
 	"go.foia.dev/muckrake/internal/context"
 	"go.foia.dev/muckrake/internal/integrity"
 	"go.foia.dev/muckrake/internal/models"
+	"go.foia.dev/muckrake/internal/resolve"
 )
 
 func RunSign(ctx *context.Context, args []string) error {
@@ -35,9 +36,6 @@ func RunSign(ctx *context.Context, args []string) error {
 	}
 	fs.Parse(flagArgs)
 
-	if len(positional) < 2 {
-		return fmt.Errorf("usage: mkrk sign [--remove] <reference> <sign-name> --pipeline <name>")
-	}
 	if *pipelineName == "" {
 		return fmt.Errorf("--pipeline is required")
 	}
@@ -45,10 +43,7 @@ func RunSign(ctx *context.Context, args []string) error {
 		return fmt.Errorf("not in a project")
 	}
 
-	rawRef := positional[0]
-	signName := positional[1]
-
-	paths, err := resolveToRelPaths(ctx, rawRef)
+	paths, signName, err := signTargets(ctx, positional)
 	if err != nil {
 		return err
 	}
@@ -139,6 +134,29 @@ func revokeSign(ctx *context.Context, fileID, pipelineID int64, signName, relPat
 
 	fmt.Fprintf(os.Stderr, "Revoked '%s' on '%s' (%d sign(s))\n", signName, relPath, revoked)
 	return nil
+}
+
+// signTargets picks the file set to sign. With a subject the positional
+// args are just (sign-name), otherwise (reference, sign-name).
+func signTargets(ctx *context.Context, args []string) ([]string, string, error) {
+	if resolve.HasNarrowSubject(ctx) {
+		if len(args) < 1 {
+			return nil, "", fmt.Errorf("usage: mkrk :<ref> sign [--remove] <sign-name> --pipeline <name>")
+		}
+		rels, err := resolve.SubjectRelPaths(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		return rels, args[0], nil
+	}
+	if len(args) < 2 {
+		return nil, "", fmt.Errorf("usage: mkrk sign [--remove] <reference> <sign-name> --pipeline <name>")
+	}
+	rels, err := resolve.RefRelPaths(ctx, args[0])
+	if err != nil {
+		return nil, "", err
+	}
+	return rels, args[1], nil
 }
 
 func whoami() string {
