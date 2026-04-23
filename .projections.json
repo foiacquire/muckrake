@@ -1,28 +1,55 @@
 {
-  "src/*.rs": {
-    "alternate": "src/{}.rs",
-    "type": "source"
+  "cmd/mkrk/*.go": {
+    "type": "main"
   },
-  "src/**/*.rs": {
-    "alternate": "src/{}.rs",
-    "type": "source"
+  "internal/*/*_test.go": {
+    "type": "test",
+    "alternate": "internal/{}.go"
   },
-  "src/cli/*.rs": {
+  "internal/*/*.go": {
+    "type": "source",
+    "alternate": "internal/{}_test.go"
+  },
+  "internal/cli/*.go": {
     "type": "command"
   },
-  "src/db/*.rs": {
+  "internal/db/*.go": {
     "type": "db"
   },
-  "src/models/*.rs": {
+  "internal/models/*.go": {
     "type": "model"
   },
-  "src/context/*.rs": {
+  "internal/context/*.go": {
     "type": "context"
   },
-  "src/integrity/*.rs": {
+  "internal/integrity/*.go": {
     "type": "integrity"
   },
-  "src/tools/*.rs": {
-    "type": "tool"
+  "internal/generator/*.go": {
+    "type": "generator"
+  },
+  "internal/materialize/*.go": {
+    "type": "materialize"
+  },
+  "internal/evaluate/*.go": {
+    "type": "evaluate"
+  },
+  "internal/reference/*.go": {
+    "type": "reference"
+  },
+  "internal/resolve/*.go": {
+    "type": "resolve"
+  },
+  "internal/walk/*.go": {
+    "type": "walk"
+  },
+  "tests/*.go": {
+    "type": "integration"
+  },
+  "go.mod": {
+    "type": "gomod"
+  },
+  "README.md": {
+    "type": "readme"
   }
 }
