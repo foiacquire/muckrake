@@ -18,7 +18,7 @@ func TestMain(m *testing.M) {
 	}
 	binary = filepath.Join(tmp, "mkrk")
 
-	cmd := exec.Command("go", "build", "-o", binary, ".")
+	cmd := exec.Command("go", "build", "-o", binary, "./cmd/mkrk")
 	cmd.Dir = ".."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		panic("build failed: " + string(out))

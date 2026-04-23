@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.foia.dev/muckrake/cmd"
+	"go.foia.dev/muckrake/internal/cli"
 	"go.foia.dev/muckrake/internal/context"
 	"go.foia.dev/muckrake/internal/generator"
 	"go.foia.dev/muckrake/internal/reference"
@@ -18,15 +18,15 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"sync":     {cmd.RunSync, "scan filesystem, track new files, verify integrity"},
-	"status":   {cmd.RunStatus, "show project or file status"},
-	"list":     {cmd.RunList, "list files, optionally filtered by reference"},
-	"tag":      {cmd.RunTag, "add or remove tags (--remove)"},
-	"sign":     {cmd.RunSign, "create or revoke pipeline attestations (--remove)"},
-	"pipeline": {cmd.RunPipeline, "create or remove pipelines (--remove)"},
-	"read":     {cmd.RunRead, "output file contents to stdout"},
-	"open":     {cmd.RunOpen, "open file in $PAGER"},
-	"edit":     {cmd.RunEdit, "open file in $EDITOR"},
+	"sync":     {cli.RunSync, "scan filesystem, track new files, verify integrity"},
+	"status":   {cli.RunStatus, "show project or file status"},
+	"list":     {cli.RunList, "list files, optionally filtered by reference"},
+	"tag":      {cli.RunTag, "add or remove tags (--remove)"},
+	"sign":     {cli.RunSign, "create or revoke pipeline attestations (--remove)"},
+	"pipeline": {cli.RunPipeline, "create or remove pipelines (--remove)"},
+	"read":     {cli.RunRead, "output file contents to stdout"},
+	"open":     {cli.RunOpen, "open file in $PAGER"},
+	"edit":     {cli.RunEdit, "open file in $EDITOR"},
 }
 
 const helpText = `mkrk — investigative journalism research management
@@ -87,7 +87,7 @@ func main() {
 
 	// Init creates context rather than consuming it.
 	if args[0] == "init" {
-		if err := cmd.RunInit(args[1:]); err != nil {
+		if err := cli.RunInit(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -277,7 +277,7 @@ func runGenerated(verb string, d *dispatch, args []string) error {
 	}
 	for _, g := range gens {
 		if g.Verb == verb {
-			return cmd.RunGenerated(ctxs, gens, verb, args)
+			return cli.RunGenerated(ctxs, gens, verb, args)
 		}
 	}
 	return fmt.Errorf("unknown command: %s", verb)
