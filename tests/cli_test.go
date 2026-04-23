@@ -393,6 +393,75 @@ func TestSubjectReadFile(t *testing.T) {
 	}
 }
 
+func TestTagFilterInSubject(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+
+	createTestFile(t, wsDir, "projects/alpha/evidence/a.txt", "a")
+	createTestFile(t, wsDir, "projects/alpha/evidence/b.txt", "b")
+	createTestFile(t, wsDir, "projects/alpha/evidence/c.txt", "c")
+	mustMkrk(t, wsDir, "sync")
+
+	projDir := filepath.Join(wsDir, "projects/alpha")
+	mustMkrk(t, projDir, "tag", "evidence/a.txt", "important")
+	mustMkrk(t, projDir, "tag", "evidence/c.txt", "important")
+
+	// :alpha.evidence!important should list only a.txt and c.txt
+	stdout, _ := mustMkrk(t, wsDir, ":alpha.evidence!important", "list")
+	if !strings.Contains(stdout, "a.txt") {
+		t.Fatalf("expected a.txt (tagged) in output, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "c.txt") {
+		t.Fatalf("expected c.txt (tagged) in output, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "b.txt") {
+		t.Fatalf("did not expect b.txt (untagged) in output, got: %s", stdout)
+	}
+}
+
+func TestTagFilterAndOrCombinations(t *testing.T) {
+	wsDir := filepath.Join(t.TempDir(), "workspace")
+	os.MkdirAll(wsDir, 0o755)
+	mustMkrk(t, wsDir, "init", "--workspace", "projects/")
+	mustMkrk(t, wsDir, "init", "alpha")
+	projDir := filepath.Join(wsDir, "projects/alpha")
+
+	for _, n := range []string{"a", "b", "c", "d"} {
+		createTestFile(t, wsDir, "projects/alpha/evidence/"+n+".txt", n)
+	}
+	mustMkrk(t, wsDir, "sync")
+
+	// a: classified+leaked, b: classified, c: leaked, d: neither
+	mustMkrk(t, projDir, "tag", "evidence/a.txt", "classified")
+	mustMkrk(t, projDir, "tag", "evidence/a.txt", "leaked")
+	mustMkrk(t, projDir, "tag", "evidence/b.txt", "classified")
+	mustMkrk(t, projDir, "tag", "evidence/c.txt", "leaked")
+
+	// OR within group: !classified,leaked → a, b, c
+	stdout, _ := mustMkrk(t, wsDir, ":alpha.evidence!classified,leaked", "list")
+	for _, want := range []string{"a.txt", "b.txt", "c.txt"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("OR filter: expected %s, got: %s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "d.txt") {
+		t.Fatalf("OR filter: d.txt should not be present, got: %s", stdout)
+	}
+
+	// AND across groups: !classified!leaked → a only
+	stdout, _ = mustMkrk(t, wsDir, ":alpha.evidence!classified!leaked", "list")
+	if !strings.Contains(stdout, "a.txt") {
+		t.Fatalf("AND filter: expected a.txt, got: %s", stdout)
+	}
+	for _, reject := range []string{"b.txt", "c.txt", "d.txt"} {
+		if strings.Contains(stdout, reject) {
+			t.Fatalf("AND filter: did not expect %s, got: %s", reject, stdout)
+		}
+	}
+}
+
 func TestSubjectUnknownProject(t *testing.T) {
 	wsDir := filepath.Join(t.TempDir(), "workspace")
 	os.MkdirAll(wsDir, 0o755)

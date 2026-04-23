@@ -2,84 +2,82 @@ package resolve
 
 import (
 	"path/filepath"
-	"strings"
 
 	"go.foia.dev/muckrake/internal/context"
 	"go.foia.dev/muckrake/internal/reference"
 )
 
-// HasNarrowSubject reports whether ctx.Subject names a scope narrower than
-// the project itself (i.e., a category or file within the project).
+// HasNarrowSubject reports whether ctx.Subject names something narrower
+// than the project itself (a category, file, tag filter, or glob).
 func HasNarrowSubject(ctx *context.Context) bool {
 	if ctx == nil || ctx.Subject == nil {
 		return false
 	}
-	return narrowSubject(ctx.Subject) != ""
+	return !isProjectOnly(ctx.Subject)
 }
 
 // SubjectFiles resolves ctx.Subject into absolute file paths. Returns nil
-// when no subject is set or when the subject does not narrow past the
-// project level (in which case the command should operate on the whole
-// project).
+// when the subject is absent or only names a project (command should
+// operate on the whole project).
 func SubjectFiles(ctx *context.Context) ([]string, error) {
-	if ctx == nil || ctx.Subject == nil {
-		return nil, nil
+	rels, err := SubjectRelPaths(ctx)
+	if err != nil {
+		return nil, err
 	}
-	sub := narrowSubject(ctx.Subject)
-	if sub == "" {
-		return nil, nil
+	var paths []string
+	for _, rel := range rels {
+		if filepath.IsAbs(rel) {
+			paths = append(paths, rel)
+			continue
+		}
+		paths = append(paths, filepath.Join(ctx.ProjectRoot, rel))
 	}
-	return Ref(ctx, sub)
+	return paths, nil
 }
 
 // SubjectRelPaths is SubjectFiles returning paths relative to ProjectRoot.
 func SubjectRelPaths(ctx *context.Context) ([]string, error) {
-	paths, err := SubjectFiles(ctx)
-	if err != nil {
-		return nil, err
+	if ctx == nil || ctx.Subject == nil {
+		return nil, nil
 	}
-	var rels []string
-	for _, p := range paths {
-		rel, err := filepath.Rel(ctx.ProjectRoot, p)
-		if err != nil {
-			continue
-		}
-		rels = append(rels, rel)
+	if isProjectOnly(ctx.Subject) {
+		return nil, nil
 	}
-	return rels, nil
+	narrowed := narrowReference(ctx.Subject)
+	return FromReference(ctx, narrowed)
 }
 
-// narrowSubject turns a subject reference into a resolver-consumable string
-// representing the portion of the ref narrower than the project level.
-// Returns empty string when the ref only names a project (or is bare ":").
-func narrowSubject(r *reference.Reference) string {
+// isProjectOnly reports whether a subject names only a project (or the
+// workspace root), with no scope/tag/glob narrower than that.
+func isProjectOnly(r *reference.Reference) bool {
 	if r == nil {
-		return ""
+		return true
+	}
+	if len(r.Tags) > 0 || r.Glob != nil {
+		return false
 	}
 	switch r.Kind {
 	case reference.KindWorkspace:
 		if r.WorkspaceWide {
-			return joinScopeLevels(r.Scope)
+			return len(r.Scope) == 0
 		}
-		if len(r.Scope) > 1 {
-			return joinScopeLevels(r.Scope[1:])
-		}
-		return ""
+		return len(r.Scope) <= 1
 	case reference.KindContext:
-		return joinScopeLevels(r.Scope)
-	case reference.KindBarePath:
-		return r.Raw
+		return len(r.Scope) == 0
 	}
-	return ""
+	return true
 }
 
-func joinScopeLevels(levels []reference.ScopeLevel) string {
-	var parts []string
-	for _, l := range levels {
-		if len(l.Names) == 0 {
-			continue
+// narrowReference returns a copy of the subject with the project prefix
+// stripped, so the resolver sees just the project-local scope/tags/glob.
+func narrowReference(r *reference.Reference) *reference.Reference {
+	narrowed := *r
+	if r.Kind == reference.KindWorkspace {
+		if !r.WorkspaceWide && len(r.Scope) > 0 {
+			narrowed.Scope = r.Scope[1:]
 		}
-		parts = append(parts, l.Names[0])
+		narrowed.Kind = reference.KindContext
+		narrowed.WorkspaceWide = false
 	}
-	return strings.Join(parts, ".")
+	return &narrowed
 }
