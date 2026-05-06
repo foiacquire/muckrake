@@ -18,15 +18,14 @@ type command struct {
 }
 
 var commands = map[string]command{
-	"sync":     {cli.RunSync, "scan filesystem, track new files, verify integrity"},
-	"status":   {cli.RunStatus, "show project or file status"},
-	"list":     {cli.RunList, "list files, optionally filtered by reference"},
-	"tag":      {cli.RunTag, "add or remove tags (--remove)"},
-	"sign":     {cli.RunSign, "create or revoke pipeline attestations (--remove)"},
-	"pipeline": {cli.RunPipeline, "create or remove pipelines (--remove)"},
-	"read":     {cli.RunRead, "output file contents to stdout"},
-	"open":     {cli.RunOpen, "open file in $PAGER"},
-	"edit":     {cli.RunEdit, "open file in $EDITOR"},
+	"sync":   {cli.RunSync, "scan filesystem, track new files, verify integrity"},
+	"status": {cli.RunStatus, "show project or file status"},
+	"list":   {cli.RunList, "list files, optionally filtered by reference"},
+	"add":    {cli.RunAdd, "create a resource (pipeline, ruleset, tag, sign, tool)"},
+	"remove": {cli.RunRemove, "remove a resource (pipeline, ruleset, tag, sign, tool)"},
+	"read":   {cli.RunRead, "output file contents to stdout"},
+	"open":   {cli.RunOpen, "open file in $PAGER"},
+	"edit":   {cli.RunEdit, "open file in $EDITOR"},
 }
 
 const helpText = `mkrk — investigative journalism research management
@@ -47,9 +46,8 @@ commands:
   sync       scan filesystem, track new files, verify integrity
   status     show project or file status
   list       list files, optionally filtered by reference
-  tag        add or remove tags (--remove)
-  sign       create or revoke pipeline attestations (--remove)
-  pipeline   create or remove pipelines (--remove)
+  add        create a resource: pipeline, ruleset, tag, sign, tool
+  remove     remove a resource: pipeline, ruleset, tag, sign, tool
   read       output file contents to stdout
   open       open file in $PAGER
   edit       open file in $EDITOR

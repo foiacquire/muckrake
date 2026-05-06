@@ -170,7 +170,7 @@ func TestTagAndStatus(t *testing.T) {
 	createTestFile(t, dir, "evidence/doc.txt", "tagged content")
 	mustMkrk(t, dir, "sync")
 
-	_, stderr := mustMkrk(t, dir, "tag", "evidence/doc.txt", "important")
+	_, stderr := mustMkrk(t, dir, "add", "tag", "evidence/doc.txt", "important")
 	if !strings.Contains(stderr, "!important") {
 		t.Fatalf("expected tag confirmation, got: %s", stderr)
 	}
@@ -186,8 +186,8 @@ func TestTagRemove(t *testing.T) {
 	createTestFile(t, dir, "evidence/doc.txt", "tagged content")
 	mustMkrk(t, dir, "sync")
 
-	mustMkrk(t, dir, "tag", "evidence/doc.txt", "removeme")
-	mustMkrk(t, dir, "tag", "--remove", "evidence/doc.txt", "removeme")
+	mustMkrk(t, dir, "add", "tag", "evidence/doc.txt", "removeme")
+	mustMkrk(t, dir, "remove", "tag", "evidence/doc.txt", "removeme")
 
 	stdout, _ := mustMkrk(t, dir, "status", "evidence/doc.txt")
 	if strings.Contains(stdout, "removeme") {
@@ -200,7 +200,7 @@ func TestTagRemove(t *testing.T) {
 func TestPipelineCreateAndRemove(t *testing.T) {
 	dir := initTestProject(t)
 
-	_, stderr := mustMkrk(t, dir, "pipeline", "editorial", "--states", "draft,review,published")
+	_, stderr := mustMkrk(t, dir, "add", "pipeline", "editorial", "--states", "draft,review,published")
 	if !strings.Contains(stderr, "Created pipeline") {
 		t.Fatalf("expected creation message, got: %s", stderr)
 	}
@@ -210,7 +210,7 @@ func TestPipelineCreateAndRemove(t *testing.T) {
 		t.Fatalf("expected pipeline in status, got: %s", stdout)
 	}
 
-	mustMkrk(t, dir, "pipeline", "--remove", "editorial")
+	mustMkrk(t, dir, "remove", "pipeline", "editorial")
 
 	stdout, _ = mustMkrk(t, dir, "status")
 	if strings.Contains(stdout, "editorial") {
@@ -224,16 +224,53 @@ func TestSignAndRevoke(t *testing.T) {
 	dir := initTestProject(t)
 	createTestFile(t, dir, "evidence/doc.txt", "evidence content")
 	mustMkrk(t, dir, "sync")
-	mustMkrk(t, dir, "pipeline", "editorial", "--states", "draft,review,published")
+	mustMkrk(t, dir, "add", "pipeline", "editorial", "--states", "draft,review,published")
 
-	_, stderr := mustMkrk(t, dir, "sign", "evidence/doc.txt", "review", "--pipeline", "editorial")
+	_, stderr := mustMkrk(t, dir, "add", "sign", "evidence/doc.txt", "review", "--pipeline", "editorial")
 	if !strings.Contains(stderr, "Signed") {
 		t.Fatalf("expected sign confirmation, got: %s", stderr)
 	}
 
-	_, stderr = mustMkrk(t, dir, "sign", "--remove", "evidence/doc.txt", "review", "--pipeline", "editorial")
+	_, stderr = mustMkrk(t, dir, "remove", "sign", "evidence/doc.txt", "review", "--pipeline", "editorial")
 	if !strings.Contains(stderr, "Revoked") {
 		t.Fatalf("expected revoke confirmation, got: %s", stderr)
+	}
+}
+
+// --- Ruleset / Tool resources ---
+
+func TestAddRuleset(t *testing.T) {
+	dir := initTestProject(t)
+	_, stderr := mustMkrk(t, dir, "add", "ruleset", "extras", "--description", "extra rules")
+	if !strings.Contains(stderr, "Created ruleset 'extras'") {
+		t.Fatalf("expected creation message, got: %s", stderr)
+	}
+	stdout, _ := mustMkrk(t, dir, "status")
+	if !strings.Contains(stdout, "extras") {
+		t.Fatalf("expected ruleset in status, got: %s", stdout)
+	}
+	mustMkrk(t, dir, "remove", "ruleset", "extras")
+}
+
+func TestAddRemoveTool(t *testing.T) {
+	dir := initTestProject(t)
+	_, stderr := mustMkrk(t, dir, "add", "tool", "demo")
+	if !strings.Contains(stderr, "Created tool 'demo'") {
+		t.Fatalf("expected creation message, got: %s", stderr)
+	}
+	expected := filepath.Join(dir, "tools/demo.sh")
+	if info, err := os.Stat(expected); err != nil {
+		t.Fatalf("expected tool file at %s: %v", expected, err)
+	} else if info.Mode()&0o111 == 0 {
+		t.Fatalf("tool file not executable: %v", info.Mode())
+	}
+
+	_, stderr = mustMkrk(t, dir, "remove", "tool", "demo")
+	if !strings.Contains(stderr, "Removed tool 'demo'") {
+		t.Fatalf("expected removal message, got: %s", stderr)
+	}
+	if _, err := os.Stat(expected); err == nil {
+		t.Fatalf("tool file should be gone, still at %s", expected)
 	}
 }
 
@@ -367,7 +404,7 @@ func TestSubjectTagAndStatus(t *testing.T) {
 	mustMkrk(t, wsDir, "sync")
 
 	// Tag via subject: no positional ref arg needed.
-	_, stderr := mustMkrk(t, wsDir, ":alpha.evidence", "tag", "important")
+	_, stderr := mustMkrk(t, wsDir, ":alpha.evidence", "add", "tag", "important")
 	if !strings.Contains(stderr, "important") {
 		t.Fatalf("expected tag confirmation, got: %s", stderr)
 	}
@@ -405,8 +442,8 @@ func TestTagFilterInSubject(t *testing.T) {
 	mustMkrk(t, wsDir, "sync")
 
 	projDir := filepath.Join(wsDir, "projects/alpha")
-	mustMkrk(t, projDir, "tag", "evidence/a.txt", "important")
-	mustMkrk(t, projDir, "tag", "evidence/c.txt", "important")
+	mustMkrk(t, projDir, "add", "tag", "evidence/a.txt", "important")
+	mustMkrk(t, projDir, "add", "tag", "evidence/c.txt", "important")
 
 	// :alpha.evidence!important should list only a.txt and c.txt
 	stdout, _ := mustMkrk(t, wsDir, ":alpha.evidence!important", "list")
@@ -434,10 +471,10 @@ func TestTagFilterAndOrCombinations(t *testing.T) {
 	mustMkrk(t, wsDir, "sync")
 
 	// a: classified+leaked, b: classified, c: leaked, d: neither
-	mustMkrk(t, projDir, "tag", "evidence/a.txt", "classified")
-	mustMkrk(t, projDir, "tag", "evidence/a.txt", "leaked")
-	mustMkrk(t, projDir, "tag", "evidence/b.txt", "classified")
-	mustMkrk(t, projDir, "tag", "evidence/c.txt", "leaked")
+	mustMkrk(t, projDir, "add", "tag", "evidence/a.txt", "classified")
+	mustMkrk(t, projDir, "add", "tag", "evidence/a.txt", "leaked")
+	mustMkrk(t, projDir, "add", "tag", "evidence/b.txt", "classified")
+	mustMkrk(t, projDir, "add", "tag", "evidence/c.txt", "leaked")
 
 	// OR within group: !classified,leaked → a, b, c
 	stdout, _ := mustMkrk(t, wsDir, ":alpha.evidence!classified,leaked", "list")
