@@ -85,8 +85,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Init creates context rather than consuming it.
-	if args[0] == "init" {
+	switch args[0] {
+	case "help", "--help", "-h":
+		fmt.Print(helpText)
+		return
+	case "init":
 		if err := cli.RunInit(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
