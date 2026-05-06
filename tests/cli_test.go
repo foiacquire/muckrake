@@ -252,6 +252,63 @@ func TestAddRuleset(t *testing.T) {
 	mustMkrk(t, dir, "remove", "ruleset", "extras")
 }
 
+func TestRulesetRuleAndSubscription(t *testing.T) {
+	dir := initTestProject(t)
+
+	mustMkrk(t, dir, "add", "ruleset", "policy_immutable")
+	_, stderr := mustMkrk(t, dir, "add", "rule", "policy_immutable",
+		"apply_policy", "--protection-level", "immutable")
+	if !strings.Contains(stderr, "Added rule apply_policy") {
+		t.Fatalf("expected rule add confirmation, got: %s", stderr)
+	}
+
+	_, stderr = mustMkrk(t, dir, "add", "subscription", "policy_immutable", ":.evidence")
+	if !strings.Contains(stderr, "Subscribed 'policy_immutable' to :.evidence") {
+		t.Fatalf("expected subscription confirmation, got: %s", stderr)
+	}
+
+	stdout, _ := mustMkrk(t, dir, "status")
+	if !strings.Contains(stdout, "policy_immutable") {
+		t.Fatalf("expected ruleset in status, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "apply_policy") {
+		t.Fatalf("expected rule in status, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, ":.evidence") {
+		t.Fatalf("expected subscription in status, got: %s", stdout)
+	}
+
+	// Rule priority is auto-assigned starting at 0
+	mustMkrk(t, dir, "remove", "rule", "policy_immutable", "0")
+	mustMkrk(t, dir, "remove", "subscription", "policy_immutable", ":.evidence")
+
+	stdout, _ = mustMkrk(t, dir, "status")
+	if strings.Contains(stdout, "apply_policy") {
+		t.Fatalf("rule should be gone, got: %s", stdout)
+	}
+}
+
+func TestRuleRequiresFlags(t *testing.T) {
+	dir := initTestProject(t)
+	mustMkrk(t, dir, "add", "ruleset", "test")
+
+	_, stderr, err := mkrk(t, dir, "add", "rule", "test", "generate_command")
+	if err == nil {
+		t.Fatal("expected error: generate_command without --verb")
+	}
+	if !strings.Contains(stderr, "--verb") {
+		t.Fatalf("expected --verb error, got: %s", stderr)
+	}
+
+	_, stderr, err = mkrk(t, dir, "add", "rule", "test", "apply_policy")
+	if err == nil {
+		t.Fatal("expected error: apply_policy without --protection-level")
+	}
+	if !strings.Contains(stderr, "--protection-level") {
+		t.Fatalf("expected --protection-level error, got: %s", stderr)
+	}
+}
+
 func TestAddRemoveTool(t *testing.T) {
 	dir := initTestProject(t)
 	_, stderr := mustMkrk(t, dir, "add", "tool", "demo")

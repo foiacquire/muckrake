@@ -62,7 +62,18 @@ func projectStatus(ctx *context.Context) error {
 	if len(rulesets) > 0 {
 		fmt.Printf("  Rulesets: %d\n", len(rulesets))
 		for _, rs := range rulesets {
-			fmt.Printf("    %s\n", rs.Name)
+			if rs.ID == nil {
+				continue
+			}
+			rules, _ := ctx.ProjectDb.ListRulesForRuleset(*rs.ID)
+			subs, _ := ctx.ProjectDb.ListSubscriptionsForRuleset(*rs.ID)
+			fmt.Printf("    %s (%d rules, %d subscriptions)\n", rs.Name, len(rules), len(subs))
+			for _, r := range rules {
+				fmt.Printf("      [%d] %s\n", r.Priority, formatRuleSummary(&r))
+			}
+			for _, s := range subs {
+				fmt.Printf("      → %s\n", s.Reference)
+			}
 		}
 	}
 

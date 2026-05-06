@@ -27,11 +27,13 @@ func RunRemove(ctx *context.Context, args []string) error {
 }
 
 var removeHandlers = map[string]func(*context.Context, []string) error{
-	"pipeline": removePipelineCmd,
-	"ruleset":  removeRuleset,
-	"tag":      removeTag,
-	"sign":     removeSign,
-	"tool":     removeTool,
+	"pipeline":     removePipelineCmd,
+	"ruleset":      removeRuleset,
+	"rule":         removeRule,
+	"subscription": removeSubscription,
+	"tag":          removeTag,
+	"sign":         removeSign,
+	"tool":         removeTool,
 }
 
 func removeNouns() []string {

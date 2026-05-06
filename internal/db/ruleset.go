@@ -130,6 +130,28 @@ func (p *ProjectDb) ListRulesForRuleset(rulesetID int64) ([]models.RulesetRule, 
 	return rules, rows.Err()
 }
 
+func (p *ProjectDb) RemoveRulesetRule(ruleID int64) (int64, error) {
+	res, err := p.db.Exec(`DELETE FROM ruleset_rules WHERE id = ?`, ruleID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (p *ProjectDb) NextRulePriority(rulesetID int64) (int, error) {
+	var maxPriority sql.NullInt64
+	err := p.db.QueryRow(
+		`SELECT MAX(priority) FROM ruleset_rules WHERE ruleset_id = ?`, rulesetID,
+	).Scan(&maxPriority)
+	if err != nil {
+		return 0, err
+	}
+	if !maxPriority.Valid {
+		return 0, nil
+	}
+	return int(maxPriority.Int64) + 1, nil
+}
+
 // --- Subscriptions ---
 
 func (p *ProjectDb) SubscribeRuleset(rulesetID int64, reference string) (int64, error) {

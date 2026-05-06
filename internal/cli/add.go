@@ -30,11 +30,13 @@ func RunAdd(ctx *context.Context, args []string) error {
 }
 
 var addHandlers = map[string]func(*context.Context, []string) error{
-	"pipeline": addPipeline,
-	"ruleset":  addRuleset,
-	"tag":      addTag,
-	"sign":     addSign,
-	"tool":     addTool,
+	"pipeline":     addPipeline,
+	"ruleset":      addRuleset,
+	"rule":         addRule,
+	"subscription": addSubscription,
+	"tag":          addTag,
+	"sign":         addSign,
+	"tool":         addTool,
 }
 
 func addNouns() []string {
